@@ -1,0 +1,32 @@
+{
+  "name": "dispatch-management",
+  "version": "0.1.0",
+  "description": "wrapper for rhea to manage a dispatch router",
+  "main": "management.js",
+  "scripts": {
+    "browserify": "browserify -r .:dispatch-management -o dist/dispatch-management.js",
+    "uglify": "uglifyjs --source-map --output dist/dispatch-management.min.js dist/dispatch-management.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/ErnieAllen/dispatch-management"
+  },
+  "keywords": [
+    "rhea",
+    "dispatch",
+    "management"
+  ],
+  "author": "RedHat",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "browserify": "",
+    "uglify-js": ""
+  },
+  "bugs": {
+    "url": "https://github.com/ErnieAllen/dispatch-management/issues"
+  },
+  "homepage": "http://github.com/ErnieAllen/dispatch-management",
+  "dependencies": {
+    "rhea": "^0.2.6"
+  }
+}
