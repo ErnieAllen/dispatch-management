@@ -131,7 +131,7 @@ var rhea = require('rhea')
           this.sender &&
           this.receiver &&
           this.receiver.remote &&
-          this.receiver.remote.attach.  &&
+          this.receiver.remote.attach  &&
           this.receiver.remote.attach.source &&
           this.receiver.remote.attach.source.address  &&
           !this.lostConnection
