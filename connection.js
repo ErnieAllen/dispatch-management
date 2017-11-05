@@ -127,7 +127,14 @@ var rhea = require('rhea')
     this.schema = schema
   }
   ConnectionManager.prototype.is_connected = function () {
-    return this.connection && !this.lostConnection
+    return this.connection &&
+          this.sender &&
+          this.receiver &&
+          this.receiver.remote &&
+          this.receiver.remote.attach.  &&
+          this.receiver.remote.attach.source &&
+          this.receiver.remote.attach.source.address  &&
+          !this.lostConnection
   }
   ConnectionManager.prototype.disconnect = function () {
     this.connection.close();
