@@ -17,6 +17,7 @@
 
 var ConnectionManager = require('./connection.js')
 var Topology = require('./topology.js')
+var util = require('./utilities.js')
 
   var Management = function (protocol) {
     this.connection = new ConnectionManager(protocol)
@@ -51,4 +52,7 @@ var Topology = require('./topology.js')
     return this.connection.schema
   }
 
-module.exports = Management;
+module.exports = {
+    Management: Management,
+    Utilities: util
+}
