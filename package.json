@@ -1,6 +1,6 @@
 {
   "name": "dispatch-management",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "wrapper for rhea to manage a dispatch router",
   "main": "management.js",
   "scripts": {
