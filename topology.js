@@ -40,7 +40,7 @@ var util = require('./utilities.js');
       delete this.updatedActions[key];
   }
   Topology.prototype.executeUpdatedActions = function(error) {
-    for (action in this.updatedActions) {
+    for (var action in this.updatedActions) {
       this.updatedActions[action].apply(this, [error]);
     }
   }
@@ -221,7 +221,7 @@ var util = require('./utilities.js');
     var linkCons = conns.results.filter(function(conn) {
       return conn[connIndex] === link.connectionId;
     })
-    return conn = util.flatten(conns.attributeNames, linkCons[0]);
+    return util.flatten(conns.attributeNames, linkCons[0]);
   }
 
   Topology.prototype.nodeNameList = function() {
