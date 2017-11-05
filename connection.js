@@ -22,6 +22,8 @@ var rhea = require('rhea')
     this._objects = {}
     this._correlationID = 0
     this.maxCorrelatorDepth = 10
+    this.lostConnection = false
+
   }
   Correlator.prototype.corr = function () {
     return ++(this._correlationID) + ""
@@ -75,17 +77,17 @@ var rhea = require('rhea')
     return true
   }
   ConnectionManager.prototype.addConnectAction = function(action) {
-    if (angular.isFunction(action)) {
+    if (typeof action === "function") {
       this.connectActions.push(action);
     }
   }
   ConnectionManager.prototype.addDisconnectAction = function(action) {
-    if (angular.isFunction(action)) {
+    if (typeof action === "function") {
       this.disconnectActions.push(action);
     }
   }
   ConnectionManager.prototype.delDisconnectAction = function(action) {
-    if (angular.isFunction(action)) {
+    if (typeof action === "function") {
       var index = this.disconnectActions.indexOf(action)
       if (index >= 0)
         this.disconnectActions.splice(index, 1)
@@ -121,6 +123,7 @@ var rhea = require('rhea')
     var connectionCallback = (function (results) {
       if (!results.error) {
         this.connection = results.connection
+        this.lostConnection = false
         this.version = results.context.connection.properties.version
         this.sender = this.connection.open_sender();
         this.receiver = this.connection.open_receiver({source: {dynamic: true}});
@@ -132,10 +135,12 @@ var rhea = require('rhea')
         }).bind(this));
         this.connection.on('disconnected', (function(context) {
           this.errorText = "Unable to connect"
+          this.lostConnection = true
           this.executeDisconnectActions(this.errorText)
         }).bind(this))
         this.connection.on('connection_close', (function(context) {
           this.errorText = "Disconnected"
+          this.lostConnection = true
           this.executeDisconnectActions(this.errorText)
         }).bind(this))
       } else {
@@ -151,7 +156,7 @@ var rhea = require('rhea')
     }
   }
   ConnectionManager.prototype.is_connected = function () {
-    return this.connection && this.connection.is_open()
+    return this.connection && !this.lostConnection
   }
   ConnectionManager.prototype.getReceiverAddress = function () {
     return this.receiver.remote.attach.source.address
@@ -159,9 +164,9 @@ var rhea = require('rhea')
   // Called to see if a connection can be established on this address:port
   // Returns the context and either the connection or an error
   ConnectionManager.prototype.testConnect = function (options, callback) {
-    var deletable = true
     var conn = {connection: undefined}
-    var reconnect = angular.isDefined(options.reconnect) ? options.reconnect : false
+    var reconnect = typeof options.reconnect !== 'undefined' ? options.reconnect : false
+    console.log("connection with reconnect of " + reconnect)
     var baseAddress = options.address + ':' + options.port;
     var protocol = "ws"
     if (this.protocol === "https")
@@ -175,16 +180,16 @@ var rhea = require('rhea')
         console_identifier: "Dispatch console"
       }
     })
-    conn.connection.on('disconnected', function(context) {
-      if (deletable) {
-        //delete conn.connection
-        conn.connection = null
-      }
-      conn.connection.options.reconnect = false
+    var removeListener = function () {
+      conn.connection.removeListener('disconnected', disconnected)
+    }
+    var disconnected = function (context) {
+      conn.connection.close()
+      setTimeout(removeListener, 1)
       callback({error: "failed to connect", context: context})
-    })
+    }
+    conn.connection.on('disconnected', disconnected)
     conn.connection.on("connection_open", function (context) {
-      deletable = false;
       callback({connection: conn.connection, context: context})
     })
   }
