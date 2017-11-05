@@ -62,6 +62,7 @@ var rhea = require('rhea')
     this.disconnectActions = []
 
     this.correlator = new Correlator()
+    this.ws = rhea.websocket_connect(WebSocket)
   }
 
   ConnectionManager.prototype.versionCheck = function (minVer) {
@@ -79,12 +80,22 @@ var rhea = require('rhea')
   }
   ConnectionManager.prototype.addConnectAction = function(action) {
     if (typeof action === "function") {
+      this.delConnectAction(action)
       this.connectActions.push(action);
     }
   }
+
   ConnectionManager.prototype.addDisconnectAction = function(action) {
     if (typeof action === "function") {
+      this.delDisconnectAction(action)
       this.disconnectActions.push(action);
+    }
+  }
+  ConnectionManager.prototype.delConnectAction = function(action) {
+    if (typeof action === "function") {
+      var index = this.connectActions.indexOf(action)
+      if (index >= 0)
+        this.connectActions.splice(index, 1)
     }
   }
   ConnectionManager.prototype.delDisconnectAction = function(action) {
@@ -97,17 +108,16 @@ var rhea = require('rhea')
   ConnectionManager.prototype.executeConnectActions = function() {
     this.connectActions.forEach(function(action) {
       try {
-        action.apply();
+        action();
       } catch (e) {
         // in case the page that registered the handler has been unloaded
       }
     });
-    this.connectActions = [];
   }
   ConnectionManager.prototype.executeDisconnectActions = function(message) {
     this.disconnectActions.forEach(function(action) {
       try {
-        action.apply(this, message);
+        action(message)
       } catch (e) {
         // in case the page that registered the handler has been unloaded
       }
@@ -117,18 +127,21 @@ var rhea = require('rhea')
   ConnectionManager.prototype.setSchema = function (schema) {
     this.schema = schema
   }
+  ConnectionManager.prototype.is_connected = function () {
+    return this.connection && !this.lostConnection
+  }
   ConnectionManager.prototype.disconnect = function () {
     this.connection.close();
   }
   ConnectionManager.prototype.connect = function (options) {
     var connectionCallback = (function (results) {
       if (!results.error) {
-        this.connection = results.connection
         this.lostConnection = false
         this.version = results.context.connection.properties.version
         this.sender = this.connection.open_sender();
         this.receiver = this.connection.open_receiver({source: {dynamic: true}});
         this.receiver.on('receiver_open', (function(context) {
+          this.lostConnection = false
           this.executeConnectActions();
         }).bind(this))
         this.receiver.on("message", (function(context) {
@@ -149,15 +162,7 @@ var rhea = require('rhea')
         this.executeDisconnectActions(this.errorText)
       }
     }).bind(this)
-    if (!options.connection) {
-      options.reconnect = true
-      this.testConnect(options, connectionCallback)
-    } else {
-      connectionCallback(options)
-    }
-  }
-  ConnectionManager.prototype.is_connected = function () {
-    return this.connection && !this.lostConnection
+    this.testConnect(options, connectionCallback)
   }
   ConnectionManager.prototype.getReceiverAddress = function () {
     return this.receiver.remote.attach.source.address
@@ -165,35 +170,53 @@ var rhea = require('rhea')
   // Called to see if a connection can be established on this address:port
   // Returns the context and either the connection or an error
   ConnectionManager.prototype.testConnect = function (options, callback) {
-    var conn = {connection: undefined}
-    var reconnect = typeof options.reconnect !== 'undefined' ? options.reconnect : false
-    console.log("connection with reconnect of " + reconnect)
+    var reconnect = options.reconnect || false  // in case options.reconnect is undefined
     var baseAddress = options.address + ':' + options.port;
     var protocol = "ws"
     if (this.protocol === "https")
       protocol = "wss"
 
-    var ws = rhea.websocket_connect(WebSocket)
-    conn.connection = rhea.connect({
-      connection_details: ws(protocol + "://" + baseAddress, ["binary"]),
+    if (this.connection)
+      delete this.connection
+
+    this.connection = rhea.connect({
+      connection_details: this.ws(protocol + "://" + baseAddress, ["binary"]),
       reconnect: reconnect,
       properties: {
         console_identifier: "Dispatch console"
       }
     })
-    var removeListener = function () {
-      conn.connection.removeListener('disconnected', disconnected)
-    }
     var disconnected = function (context) {
-      conn.connection.close()
-      setTimeout(removeListener, 1)
-      callback({error: "failed to connect", context: context})
+      this.connection.removeListener('disconnected', disconnected)
+      this.lostConnection = true
+      if (callback) {
+        var cb = callback
+        callback = null
+        cb({error: "failed to connect", context: context})
+      }
     }
-    conn.connection.on('disconnected', disconnected)
-    conn.connection.on("connection_open", function (context) {
-      callback({connection: conn.connection, context: context})
-    })
+    var connection_open = function (context) {
+      this.connection.removeListener('disconnected', bound_disconnected)
+      this.connection.removeListener('connection_open', bound_connection_open)
+      // if a non-reconnect attempt suceeds, close the connection and reopen with reconnect=true
+      if (!reconnect) {
+        this.lostConnection = true
+        var cb = callback
+        callback = null   // prevent duplicate calls of callback when disconnected event fires after the close()
+        this.connection.close()
+        delete this.connection
+        cb({})
+        return
+      }
+      if (callback)
+        callback({context: context})
+    }
+    var bound_disconnected = disconnected.bind(this)
+    var bound_connection_open = connection_open.bind(this)
+    this.connection.on('disconnected', bound_disconnected)
+    this.connection.on("connection_open", bound_connection_open)
   }
+
   ConnectionManager.prototype.sendMgmtQuery = function (operation) {
     return this.send([], "/$management", operation)
   }
