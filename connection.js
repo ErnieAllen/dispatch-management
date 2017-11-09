@@ -37,7 +37,7 @@ var rhea = require('rhea')
   Correlator.prototype.resolve = function (context) {
     var correlationID = context.message.correlation_id;
     // call the promise's resolve function with a copy of the rhea response (so we don't keep any references to internal rhea data)
-    this._objects[correlationID].resolver(util.copy(context.message.body), context);
+    this._objects[correlationID].resolver({response: util.copy(context.message.body), context: context});
     delete this._objects[correlationID];
   }
   Correlator.prototype.reject = function (id, error) {

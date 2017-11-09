@@ -38,7 +38,7 @@ var rhea = require('rhea')
   Correlator.prototype.resolve = function (context) {
     var correlationID = context.message.correlation_id;
     // call the promise's resolve function with a copy of the rhea response (so we don't keep any references to internal rhea data)
-    this._objects[correlationID].resolver(util.copy(context.message.body), context);
+    this._objects[correlationID].resolver({response: util.copy(context.message.body), context: context});
     delete this._objects[correlationID];
   }
   Correlator.prototype.reject = function (id, error) {
@@ -9840,6 +9840,7 @@ var util = require('./utilities.js');
   Topology.prototype.get = function () {
     this.connection.sendMgmtQuery("GET-MGMT-NODES")
       .then( (function (response) {
+        response = response.response
         if (Object.prototype.toString.call(response) === '[object Array]') {
           var workInfo = {}
           // if there is only one node, it will not be returned
@@ -10049,7 +10050,7 @@ var util = require('./utilities.js');
     this.connection.sendQuery(nodeName, entity, attrs)
       .then( function (response) {
         clearTimeout(atimer)
-        callback(nodeName, entity, response);
+        callback(nodeName, entity, response.response);
       }, function (error) {
         q.abort()
       })
@@ -10280,6 +10281,7 @@ var util = require('./utilities.js')
     var self = this
     this.connection.sendMgmtQuery("GET-SCHEMA")
       .then(function (response) {
+        response = response.response
         for (var entityName in response.entityTypes) {
           var entity = response.entityTypes[entityName]
           if (entity.deprecated) {

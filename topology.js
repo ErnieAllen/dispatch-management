@@ -65,6 +65,7 @@ var util = require('./utilities.js');
   Topology.prototype.get = function () {
     this.connection.sendMgmtQuery("GET-MGMT-NODES")
       .then( (function (response) {
+        response = response.response
         if (Object.prototype.toString.call(response) === '[object Array]') {
           var workInfo = {}
           // if there is only one node, it will not be returned
@@ -274,7 +275,7 @@ var util = require('./utilities.js');
     this.connection.sendQuery(nodeName, entity, attrs)
       .then( function (response) {
         clearTimeout(atimer)
-        callback(nodeName, entity, response);
+        callback(nodeName, entity, response.response);
       }, function (error) {
         q.abort()
       })
