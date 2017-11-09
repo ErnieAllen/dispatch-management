@@ -243,7 +243,7 @@ var rhea = require('rhea')
     return this._send(body, to, application_properties)
   }
   ConnectionManager.prototype.sendMethod = function (toAddr, entity, attrs, operation, props) {
-    var fullAddr = self._fullAddr(toAddr);
+    var fullAddr = this._fullAddr(toAddr);
     var application_properties = {
       operation: operation,
     }
