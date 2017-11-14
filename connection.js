@@ -248,7 +248,7 @@ var rhea = require('rhea')
       operation: operation,
     }
     if (entity) {
-      application_properties.type = self.schema.entityTypes[entity].fullyQualifiedType
+      application_properties.type = this.schema.entityTypes[entity].fullyQualifiedType
     }
     if (attrs.name)
       application_properties.name = attrs.name

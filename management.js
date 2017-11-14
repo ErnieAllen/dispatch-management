@@ -26,8 +26,8 @@ var util = require('./utilities.js')
   Management.prototype.getSchema = function (callback) {
     var self = this
     this.connection.sendMgmtQuery("GET-SCHEMA")
-      .then(function (response) {
-        response = response.response
+      .then(function (responseAndContext) {
+        var response = responseAndContext.response
         for (var entityName in response.entityTypes) {
           var entity = response.entityTypes[entityName]
           if (entity.deprecated) {
