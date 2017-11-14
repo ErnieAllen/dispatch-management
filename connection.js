@@ -252,6 +252,8 @@ var rhea = require('rhea')
     }
     if (attrs.name)
       application_properties.name = attrs.name
+    else if (attrs.identity)
+      application_properties.identity = attrs.identity
     if (props) {
       jQuery.extend(application_properties, props)
     }
