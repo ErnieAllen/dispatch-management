@@ -10027,8 +10027,14 @@ var util = require('./utilities.js');
     }
     return nl;
   }
+  // extract the name of the router from the router id
   Topology.prototype.nameFromId = function(id) {
-    return id.split('/')[3];
+    // the router id looks like 'amqp:/topo/0/routerName/$managemrnt'
+    var parts = id.split('/')
+    // handle cases where the router name contains a /
+    parts.splice(0, 3)  // remove amqp, topo, 0
+    parts.pop()         // remove $management
+    return parts.join('/')
   }
 
   // d3.queue'd function to make a management query for entities/attributes
