@@ -71,7 +71,7 @@ var util = require('./utilities.js');
           // if there is only one node, it will not be returned
           if (response.length === 0) {
             var parts = this.connection.getReceiverAddress().split('/')
-            parts[4] = '$management'
+            parts[parts.length-1] = '$management'
             response.push(parts.join('/'))
           }
           for (var i=0; i<response.length; ++i) {
