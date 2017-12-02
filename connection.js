@@ -144,7 +144,10 @@ var rhea = require('rhea')
       if (!results.error) {
         this.lostConnection = false
         this.version = results.context.connection.properties.version
-        this.sender = this.connection.open_sender();
+        if (options.sender_address)
+          this.sender = this.connection.open_sender(options.sender_address);
+        else
+          this.sender = this.connection.open_sender();
         this.receiver = this.connection.open_receiver({source: {dynamic: true}});
         this.receiver.on('receiver_open', (function(context) {
           this.lostConnection = false
