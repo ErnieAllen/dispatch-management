@@ -178,6 +178,9 @@ var rhea = require('rhea')
   ConnectionManager.prototype.testConnect = function (options, callback) {
     var reconnect = options.reconnect || false  // in case options.reconnect is undefined
     var baseAddress = options.address + ':' + options.port;
+    if (options.linkRouteAddress) {
+      baseAddress += ('/'+options.linkRouteAddress)
+    }
     var protocol = "ws"
     if (this.protocol === "https")
       protocol = "wss"
@@ -188,9 +191,7 @@ var rhea = require('rhea')
     this.connection = rhea.connect({
       connection_details: this.ws(protocol + "://" + baseAddress, ["binary"]),
       reconnect: reconnect,
-      properties: {
-        console_identifier: "Dispatch console"
-      }
+      properties: options.properties || {console_identifier: "Dispatch console"}
     })
     var disconnected = function (context) {
       this.connection.removeListener('disconnected', disconnected)

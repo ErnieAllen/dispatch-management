@@ -179,6 +179,9 @@ var rhea = require('rhea')
   ConnectionManager.prototype.testConnect = function (options, callback) {
     var reconnect = options.reconnect || false  // in case options.reconnect is undefined
     var baseAddress = options.address + ':' + options.port;
+    if (options.linkRouteAddress) {
+      baseAddress += ('/'+options.linkRouteAddress)
+    }
     var protocol = "ws"
     if (this.protocol === "https")
       protocol = "wss"
@@ -189,9 +192,7 @@ var rhea = require('rhea')
     this.connection = rhea.connect({
       connection_details: this.ws(protocol + "://" + baseAddress, ["binary"]),
       reconnect: reconnect,
-      properties: {
-        console_identifier: "Dispatch console"
-      }
+      properties: options.properties || {console_identifier: "Dispatch console"}
     })
     var disconnected = function (context) {
       this.connection.removeListener('disconnected', disconnected)
@@ -4524,11 +4525,11 @@ Connection.prototype.find_link = function (filter) {
 };
 
 Connection.prototype.each_receiver = function (action, filter) {
-    this.each_link(util.receiver_filter(filter));
+    this.each_link(action, util.receiver_filter(filter));
 };
 
 Connection.prototype.each_sender = function (action, filter) {
-    this.each_link(util.sender_filter(filter));
+    this.each_link(action, util.sender_filter(filter));
 };
 
 Connection.prototype.each_link = function (action, filter) {
@@ -6539,6 +6540,9 @@ CircularBuffer.prototype.get_head = function () {
     return this.size > 0 ? this.entries[this.head] : undefined;
 };
 
+CircularBuffer.prototype.get_tail = function () {
+    return this.size > 0 ? this.entries[(this.head + this.size - 1) % this.capacity] : undefined;
+};
 
 function write_dispositions(deliveries) {
     var first, last, next_id, i, delivery;
@@ -6568,7 +6572,7 @@ function write_dispositions(deliveries) {
     }
 }
 
-var Outgoing = function () {
+var Outgoing = function (connection) {
     /* TODO: make size configurable? */
     this.deliveries = new CircularBuffer(2048);
     this.updated = [];
@@ -6579,17 +6583,38 @@ var Outgoing = function () {
     this.window = types.MAX_UINT;
     this.remote_next_transfer_id = undefined;
     this.remote_window = undefined;
+    this.connection = connection;
 };
 
 Outgoing.prototype.available = function () {
     return this.deliveries.available();
 };
 
+Outgoing.prototype.compute_max_payload = function (tag) {
+    if (this.connection.max_frame_size) {
+        return this.connection.max_frame_size - (50 + tag.length);
+    } else {
+        return undefined;
+    }
+};
+
 Outgoing.prototype.send = function (sender, tag, data, format) {
+    var fragments = [];
+    var max_payload = this.compute_max_payload(tag);
+    if (max_payload && data.length > max_payload) {
+        var start = 0;
+        while (start < data.length) {
+            var end = Math.min(start + max_payload, data.length);
+            fragments.push(data.slice(start, end));
+            start = end;
+        }
+    } else {
+        fragments.push(data);
+    }
     var d = {'id':this.next_delivery_id++,
              'tag':tag,
              'link':sender,
-             'data': data,
+             'data': fragments,
              'format':format ? format : 0,
              'sent': false,
              'settled': false,
@@ -6660,14 +6685,16 @@ Outgoing.prototype.process = function() {
         d = this.deliveries.by_id(this.next_pending_delivery);
         if (d) {
             if (d.link.has_credit()) {
-                d.link.delivery_count++;
-                //TODO: fragment as appropriate
-                d.transfers_required = 1;
-                if (this.transfer_window() >= d.transfers_required) {
-                    this.next_transfer_id += d.transfers_required;
-                    this.window -= d.transfers_required;
-                    d.link.session.output(frames.transfer({'handle':d.link.local.handle,'message_format':d.format,'delivery_id':d.id, 'delivery_tag':d.tag, 'settled':d.settled}).described(), d.data);
+                if (this.transfer_window() >= d.data.length) {
+                    this.window -= d.data.length;
+                    for (var i = 0; i < d.data.length; i++) {
+                        this.next_transfer_id++;
+                        var more = (i+1) < d.data.length;
+                        var transfer = frames.transfer({'handle':d.link.local.handle,'message_format':d.format,'delivery_id':d.id, 'delivery_tag':d.tag, 'settled':d.settled, 'more':more});
+                        d.link.session.output(transfer.described(), d.data[i]);
+                    }
                     d.link.credit--;
+                    d.link.delivery_count++;
                     this.next_pending_delivery++;
                 } else {
                     log.flow('Incoming window of peer preventing sending further transfers: remote_window=%d, remote_next_transfer_id=%d, next_transfer_id=%d',
@@ -6708,9 +6735,10 @@ var Incoming = function () {
     this.updated = [];
     this.next_transfer_id = 0;
     this.next_delivery_id = undefined;
-    this.window = 2048/*TODO: configurable?*/;
+    Object.defineProperty(this, 'window', { get: function () { return this.deliveries.available(); } });
     this.remote_next_transfer_id = undefined;
     this.remote_window = undefined;
+    this.max_transfer_id = this.next_transfer_id + this.window;
 };
 
 Incoming.prototype.update = function (delivery, settled, state) {
@@ -6732,7 +6760,7 @@ Incoming.prototype.on_transfer = function(frame, receiver) {
         }
         var current;
         var data;
-        var last = this.deliveries.get_head();
+        var last = this.deliveries.get_tail();
         if (last && last.incomplete) {
             if (frame.performative.delivery_id !== undefined && this.next_delivery_id !== frame.performative.delivery_id) {
                 //TODO: better error handling
@@ -6785,7 +6813,7 @@ Incoming.prototype.on_transfer = function(frame, receiver) {
     }
 };
 
-Incoming.prototype.process = function () {
+Incoming.prototype.process = function (session) {
     if (this.updated.length > 0) {
         write_dispositions(this.updated);
         this.updated = [];
@@ -6793,10 +6821,15 @@ Incoming.prototype.process = function () {
 
     // remove any fully settled deliveries:
     this.deliveries.pop_if(function (d) { return d.settled; });
+
+    if (this.max_transfer_id - this.next_transfer_id < (this.window / 2)) {
+        session._write_flow();
+    }
 };
 
 Incoming.prototype.on_begin = function (fields) {
     this.remote_window = fields.outgoing_window;
+    this.remote_next_transfer_id = fields.next_outgoing_id;
 };
 
 Incoming.prototype.on_flow = function (fields) {
@@ -6819,7 +6852,7 @@ Incoming.prototype.on_disposition = function (fields) {
 
 var Session = function (connection, local_channel) {
     this.connection = connection;
-    this.outgoing = new Outgoing();
+    this.outgoing = new Outgoing(connection);
     this.incoming = new Incoming();
     this.state = new EndpointState();
     this.local = {'channel': local_channel, 'handles':{}};
@@ -6834,7 +6867,7 @@ Session.prototype.constructor = Session;
 
 Session.prototype.reset = function() {
     this.state.disconnected();
-    this.outgoing = new Outgoing();
+    this.outgoing = new Outgoing(this.connection);
     this.incoming = new Incoming();
     this.remote = {'handles':{}};
     for (var l in this.links) {
@@ -6974,7 +7007,7 @@ Session.prototype._process = function () {
         }
 
         this.outgoing.process();
-        this.incoming.process();
+        this.incoming.process(this);
         for (var k in this.links) {
             this.links[k]._process();
         }
@@ -6997,6 +7030,7 @@ Session.prototype._write_flow = function (link) {
                   'next_outgoing_id':this.outgoing.next_transfer_id,
                   'outgoing_window':this.outgoing.window
                  };
+    this.incoming.max_transfer_id = fields.next_incoming_id + fields.incoming_window;
     if (link) {
         if (link._get_drain()) fields.drain = true;
         fields.delivery_count = link.delivery_count;
@@ -8298,17 +8332,17 @@ util.clone = function (o) {
     return copy;
 };
 
-util.or = function (f, g) {
+util.and = function (f, g) {
     if (g === undefined) return f;
     return function (o) {
-        return f(o) || g(o);
+        return f(o) && g(o);
     };
 };
 
 util.is_sender = function (o) { return o.is_sender(); };
 util.is_receiver = function (o) { return o.is_receiver(); };
-util.sender_filter = function (filter) { return util.or(util.is_sender, filter); };
-util.receiver_filter = function (filter) { return util.or(util.is_receiver, filter); };
+util.sender_filter = function (filter) { return util.and(util.is_sender, filter); };
+util.receiver_filter = function (filter) { return util.and(util.is_receiver, filter); };
 
 module.exports = util;
 
