@@ -192,11 +192,14 @@ var rhea = require('rhea')
     if (this.connection)
       delete this.connection
 
-    this.connection = rhea.connect({
+    var c = {
       connection_details: this.ws(protocol + "://" + baseAddress, ["binary"]),
       reconnect: reconnect,
       properties: options.properties || {console_identifier: "Dispatch console"}
-    })
+    }
+    if (options.hostname)
+      c.hostname = options.hostname
+    this.connection = rhea.connect(c)
     var disconnected = function (context) {
       this.connection.removeListener('disconnected', disconnected)
       this.lostConnection = true
