@@ -4,9 +4,11 @@ Management wrapper for qpid dispatch router
 npm install dispatch-management --save
 
 in your index.html:
-- <script src="node_modules/dispatch-management/dist/dispatch-management.js" type="text/javascript"></script>
+
+    <script src="node_modules/dispatch-management/dist/dispatch-management.js" type="text/javascript"></script>
 
 in a .js file:
+
     var dm = require("dispatch-management")
     var management = new dm.Management('http')  //  use http (or https)
 
