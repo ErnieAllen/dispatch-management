@@ -10,10 +10,11 @@ Wrapper for connecting to and managing a qpid dispatch router.
 This library uses the rhea javascript client library.
 
 npm install dispatch-management --save
+Start a dispatch router with an http listener on port 5673
 
 in your index.html:
 
-    <script src="node_modules/dispatch-management/dist/dispatch-management.js" type="text/javascript"></script>
+    <script src="node_modules/dispatch-management/dist/dispatch-management.min.js" type="text/javascript"></script>
 
 in a .js file:
 
@@ -30,7 +31,7 @@ in a .js file:
     // example of promise interface usage
     management.connection.connect(connectOptions)
       .then(function (response) {
-        console.log("connected to dispatch network on " + host + ":" + port)
+        console.log("connected to dispatch network on 0.0.0.0:5673")
         // example of callback interface
         management.getSchema(function (schema) {
           console.log("got schema")
