@@ -1,6 +1,6 @@
 require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 /*
- * Copyright 2015 Red Hat Inc.
+ * Copyright 2017 Red Hat Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,39 +16,8 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
  */
 'use strict';
 
-var util = require('./utilities.js');
 var rhea = require('rhea')
-
-  var Correlator = function () {
-    this._objects = {}
-    this._correlationID = 0
-    this.maxCorrelatorDepth = 10
-    this.lostConnection = false
-
-  }
-  Correlator.prototype.corr = function () {
-    return ++(this._correlationID) + ""
-  }
-  // Associate this correlation id with the promise's resolve and reject methods
-  Correlator.prototype.register = function (id, resolve, reject) {
-    this._objects[id] = {resolver: resolve, rejector: reject}
-  }
-  // Call the promise's resolve method.
-  // This is called by rhea's receiver.on('message') function
-  Correlator.prototype.resolve = function (context) {
-    var correlationID = context.message.correlation_id;
-    // call the promise's resolve function with a copy of the rhea response (so we don't keep any references to internal rhea data)
-    this._objects[correlationID].resolver({response: util.copy(context.message.body), context: context});
-    delete this._objects[correlationID];
-  }
-  Correlator.prototype.reject = function (id, error) {
-    this._objects[id].rejector(error);
-    delete this._objects[id];
-  }
-  // Return the number of requests that can be sent before we start queuing requests
-  Correlator.prototype.depth = function () {
-    return Math.max(1, this.maxCorrelatorDepth - Object.keys(this._objects).length)
-  }
+var Correlator = require('./correlator.js')
 
   var ConnectionManager = function (protocol) {
     this.sender = undefined
@@ -62,7 +31,17 @@ var rhea = require('rhea')
     this.disconnectActions = []
 
     this.correlator = new Correlator()
-    this.ws = rhea.websocket_connect(WebSocket)
+
+    this.on_message = (function (context) {
+      this.correlator.resolve(context);
+    }).bind(this)
+    this.on_disconnected = (function (context) {
+      this.errorText = "Disconnected"
+      this.executeDisconnectActions(this.errorText)
+    }).bind(this)
+    this.on_connection_open = (function (context) {
+      this.executeConnectActions()
+    }).bind(this)
   }
 
   ConnectionManager.prototype.versionCheck = function (minVer) {
@@ -113,6 +92,7 @@ var rhea = require('rhea')
         // in case the page that registered the handler has been unloaded
       }
     });
+    this.connectActions = [];
   }
   ConnectionManager.prototype.executeDisconnectActions = function(message) {
     this.disconnectActions.forEach(function(action) {
@@ -124,6 +104,16 @@ var rhea = require('rhea')
     });
     this.disconnectActions = [];
   }
+  ConnectionManager.prototype.on = function (eventType, fn) {
+    if (eventType === 'connected') {
+      this.addConnectAction(fn)
+    } else if (eventType === 'disconnected') {
+      this.addDisconnectAction(fn)
+    } else {
+      console.log('unknown event type ' + eventType)
+    }
+  }
+
   ConnectionManager.prototype.setSchema = function (schema) {
     this.schema = schema
   }
@@ -134,101 +124,157 @@ var rhea = require('rhea')
           this.receiver.remote &&
           this.receiver.remote.attach  &&
           this.receiver.remote.attach.source &&
-          this.receiver.remote.attach.source.address  &&
-          !this.lostConnection
+          this.receiver.remote.attach.source.address &&
+          this.connection.is_open()
   }
   ConnectionManager.prototype.disconnect = function () {
-    this.connection.close();
+    if (this.sender)
+      this.sender.close()
+    if (this.receiver)
+      this.receiver.close()
+    if (this.connection)
+      this.connection.close();
   }
-  ConnectionManager.prototype.connect = function (options) {
-    var connectionCallback = (function (results) {
-      if (!results.error) {
-        this.lostConnection = false
-        this.version = results.context.connection.properties.version
+
+  ConnectionManager.prototype.createSenderReceiver = function (options) {
+    return new Promise( (function (resolve, reject) {
+      var timeout = options.timeout || 10000
+      // set a timer in case the setup takes too long
+      var giveUp = (function () {
+        this.connection.removeListener('receiver_open', receiver_open)
+        this.connection.removeListener('sendable', sendable)
+        this.errorText = 'timed out creating senders and receivers'
+        reject(Error(this.errorText))
+      }).bind(this)
+      var timer = setTimeout(giveUp, timeout)
+
+      // register an event hander for when the setup is complete
+      var sendable = (function (context) {
+        clearTimeout(timer)
+        this.version = this.connection.properties ? this.connection.properties.version : '0.1.0'
+        // in case this connection dies
+        this.connection.on('disconnected', this.on_disconnected)
+        // in case this connection dies and is then reconnected automatically
+        this.connection.on('connection_open', this.on_connection_open)
+        // receive messages here
+        this.connection.on('message', this.on_message);
+        resolve(context)
+      }).bind(this)
+      this.connection.once('sendable', sendable)
+
+      // Now actually createt the sender and receiver.
+      // register an event handler for when the receiver opens
+      var receiver_open = (function (context) {
+        // once the receiver is open, create the sender
         if (options.sender_address)
-          this.sender = this.connection.open_sender(options.sender_address);
+          this.sender = this.connection.open_sender(options.sender_address)
         else
-          this.sender = this.connection.open_sender();
-        this.receiver = this.connection.open_receiver({source: {dynamic: true}});
-        this.receiver.on('receiver_open', (function(context) {
-          this.lostConnection = false
-          this.executeConnectActions();
-        }).bind(this))
-        this.receiver.on("message", (function(context) {
-          this.correlator.resolve(context);
-        }).bind(this));
-        this.connection.on('disconnected', (function(context) {
-          this.errorText = "Unable to connect"
-          this.lostConnection = true
-          this.executeDisconnectActions(this.errorText)
-        }).bind(this))
-        this.connection.on('connection_close', (function(context) {
-          this.errorText = "Disconnected"
-          this.lostConnection = true
-          this.executeDisconnectActions(this.errorText)
-        }).bind(this))
-      } else {
-        this.errorText = "Unable to connect"
-        this.executeDisconnectActions(this.errorText)
+          this.sender = this.connection.open_sender()
+      }).bind(this)
+      this.connection.once('receiver_open', receiver_open)
+      // create a dynamic receiver
+      this.receiver = this.connection.open_receiver({source: {dynamic: true}});
+
+    }).bind(this))
+  }
+
+  ConnectionManager.prototype.connect = function (options) {
+    return new Promise( (function (resolve, reject) {
+      var finishConnecting = function () {
+        this.createSenderReceiver(options)
+          .then( function (results) {
+            resolve(results)
+          }, function (error) {
+            reject(error)
+          })
       }
-    }).bind(this)
-    this.testConnect(options, connectionCallback)
+
+      if (!this.connection) {
+        options.test = false  // if you didn't want a connection, you should have called testConnect() and not connect()
+        this.testConnect(options)
+          .then( (function (results) {
+            finishConnecting.call(this)
+          }).bind(this), (function (error) {
+              // connect failed or timed out
+              this.errorText = "Unable to connect"
+              this.executeDisconnectActions(this.errorText)
+              reject(Error(this.errorText))
+            }).bind(this))
+      } else {
+        finishConnecting.call(this)
+      }
+    }).bind(this))
   }
   ConnectionManager.prototype.getReceiverAddress = function () {
     return this.receiver.remote.attach.source.address
   }
-  // Called to see if a connection can be established on this address:port
-  // Returns the context and either the connection or an error
+
+  // Try to connect using the options.
+  // if options.test === true -> close the connection if it succeeded and resolve the promise
+  // if the connection attempt fails or times out, reject the promise regardless of options.test
   ConnectionManager.prototype.testConnect = function (options, callback) {
-    var reconnect = options.reconnect || false  // in case options.reconnect is undefined
-    var baseAddress = options.address + ':' + options.port;
-    if (options.linkRouteAddress) {
-      baseAddress += ('/'+options.linkRouteAddress)
-    }
-    var protocol = "ws"
-    if (this.protocol === "https")
-      protocol = "wss"
-
-    if (this.connection)
-      delete this.connection
-
-    var c = {
-      connection_details: this.ws(protocol + "://" + baseAddress, ["binary"]),
-      reconnect: reconnect,
-      properties: options.properties || {console_identifier: "Dispatch console"}
-    }
-    if (options.hostname)
-      c.hostname = options.hostname
-    this.connection = rhea.connect(c)
-    var disconnected = function (context) {
-      this.connection.removeListener('disconnected', disconnected)
-      this.lostConnection = true
-      if (callback) {
-        var cb = callback
-        callback = null
-        cb({error: "failed to connect", context: context})
+    return new Promise ( (function (resolve, reject) {
+      var timeout = options.timeout || 10000
+      var reconnect = options.reconnect || false  // in case options.reconnect is undefined
+      var baseAddress = options.address + ':' + options.port;
+      if (options.linkRouteAddress) {
+        baseAddress += ('/'+options.linkRouteAddress)
       }
-    }
-    var connection_open = function (context) {
-      this.connection.removeListener('disconnected', bound_disconnected)
-      this.connection.removeListener('connection_open', bound_connection_open)
-      // if a non-reconnect attempt suceeds, close the connection and reopen with reconnect=true
-      if (!reconnect) {
-        this.lostConnection = true
-        var cb = callback
-        callback = null   // prevent duplicate calls of callback when disconnected event fires after the close()
-        this.connection.close()
+      var wsprotocol = this.protocol === "https" ? "wss" : "ws"
+
+      if (this.connection) {
         delete this.connection
-        cb({})
-        return
+        this.connection = null
       }
-      if (callback)
-        callback({context: context})
-    }
-    var bound_disconnected = disconnected.bind(this)
-    var bound_connection_open = connection_open.bind(this)
-    this.connection.on('disconnected', bound_disconnected)
-    this.connection.on("connection_open", bound_connection_open)
+
+      var ws = rhea.websocket_connect(WebSocket)
+      var c = {
+        connection_details: new ws(wsprotocol + "://" + baseAddress, ["binary"]),
+        reconnect: reconnect,
+        properties: options.properties || {console_identifier: "Dispatch console"}
+      }
+      if (options.hostname)
+        c.hostname = options.hostname
+
+      // set a timeout
+      var disconnected = (function () {
+        clearTimeout(timer)
+        rhea.removeListener('disconnected', disconnected)
+        rhea.removeListener('connection_open', connection_open)
+        this.connection = null
+        var rej = "failed to connect"
+        if (callback)
+          callback({error: rej})
+        reject(Error(rej))
+      }).bind(this)
+      var timer = setTimeout(disconnected, timeout)
+
+      // the event handler for when the connection opens
+      var connection_open = (function (context) {
+        clearTimeout(timer)
+        // prevent future disconnects from calling reject
+        rhea.removeListener('disconnected', disconnected)
+
+        // we were just checking. we don't really want a connection
+        if (options.test) {
+          context.connection.close();
+          this.connection = null
+        }
+        var res = {context: context}
+        if (callback)
+          callback(res)
+        resolve(res)
+      }).bind(this)
+
+      // register an event handler for when the connection opens
+      rhea.once('connection_open', connection_open)
+
+      // register an event handler for if the connection fails to open
+      rhea.once('disconnected', disconnected)
+
+      // attempt the connection
+      this.connection = rhea.connect(c)
+    }).bind(this))
   }
 
   ConnectionManager.prototype.sendMgmtQuery = function (operation) {
@@ -294,8 +340,68 @@ var rhea = require('rhea')
     return this.correlator.depth()
   }
 
-module.exports = ConnectionManager;
-},{"./utilities.js":38,"rhea":16}],2:[function(require,module,exports){
+  function ConnectionException(message) {
+    this.message = message
+    this.name = 'ConnectionException'
+  }
+
+exports.ConnectionManager = ConnectionManager
+exports.ConnectionException = ConnectionException
+
+},{"./correlator.js":2,"rhea":17}],2:[function(require,module,exports){
+  /*
+   * Copyright 2017 Red Hat Inc.
+   *
+   * Licensed under the Apache License, Version 2.0 (the "License");
+   * you may not use this file except in compliance with the License.
+   * You may obtain a copy of the License at
+   *
+   *     http://www.apache.org/licenses/LICENSE-2.0
+   *
+   * Unless required by applicable law or agreed to in writing, software
+   * distributed under the License is distributed on an "AS IS" BASIS,
+   * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   * See the License for the specific language governing permissions and
+   * limitations under the License.
+   */
+  'use strict';
+
+var util = require('./utilities.js')
+
+var Correlator = function () {
+    this._objects = {}
+    this._correlationID = 0
+    this.maxCorrelatorDepth = 10
+    this.lostConnection = false
+
+  }
+  Correlator.prototype.corr = function () {
+    return ++(this._correlationID) + ""
+  }
+  // Associate this correlation id with the promise's resolve and reject methods
+  Correlator.prototype.register = function (id, resolve, reject) {
+    this._objects[id] = {resolver: resolve, rejector: reject}
+  }
+  // Call the promise's resolve method.
+  // This is called by rhea's receiver.on('message') function
+  Correlator.prototype.resolve = function (context) {
+    var correlationID = context.message.correlation_id;
+    // call the promise's resolve function with a copy of the rhea response (so we don't keep any references to internal rhea data)
+    this._objects[correlationID].resolver({response: util.copy(context.message.body), context: context});
+    delete this._objects[correlationID];
+  }
+  Correlator.prototype.reject = function (id, error) {
+    this._objects[id].rejector(error);
+    delete this._objects[id];
+  }
+  // Return the number of requests that can be sent before we start queuing requests
+  Correlator.prototype.depth = function () {
+    return Math.max(1, this.maxCorrelatorDepth - Object.keys(this._objects).length)
+  }
+
+module.exports = Correlator
+
+},{"./utilities.js":39}],3:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -411,9 +517,9 @@ function fromByteArray (uint8) {
   return parts.join('')
 }
 
-},{}],3:[function(require,module,exports){
-
 },{}],4:[function(require,module,exports){
+
+},{}],5:[function(require,module,exports){
 /*!
  * The buffer module from node.js, for the browser.
  *
@@ -2129,7 +2235,7 @@ function numberIsNaN (obj) {
   return obj !== obj // eslint-disable-line no-self-compare
 }
 
-},{"base64-js":2,"ieee754":8}],5:[function(require,module,exports){
+},{"base64-js":3,"ieee754":9}],6:[function(require,module,exports){
 (function (process){
 /**
  * This is the web browser implementation of `debug()`.
@@ -2328,7 +2434,7 @@ function localstorage() {
 }
 
 }).call(this,require('_process'))
-},{"./debug":6,"_process":10}],6:[function(require,module,exports){
+},{"./debug":7,"_process":11}],7:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -2555,7 +2661,7 @@ function coerce(val) {
   return val;
 }
 
-},{"ms":9}],7:[function(require,module,exports){
+},{"ms":10}],8:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2859,7 +2965,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],8:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -2945,7 +3051,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],9:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 /**
  * Helpers.
  */
@@ -3099,7 +3205,7 @@ function plural(ms, n, name) {
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
 
-},{}],10:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -3285,7 +3391,7 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],11:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 (function (global){
 /*! https://mths.be/punycode v1.4.1 by @mathias */
 ;(function(root) {
@@ -3822,7 +3928,7 @@ process.umask = function() { return 0; };
 }(this));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3908,7 +4014,7 @@ var isArray = Array.isArray || function (xs) {
   return Object.prototype.toString.call(xs) === '[object Array]';
 };
 
-},{}],13:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3995,13 +4101,13 @@ var objectKeys = Object.keys || function (obj) {
   return res;
 };
 
-},{}],14:[function(require,module,exports){
+},{}],15:[function(require,module,exports){
 'use strict';
 
 exports.decode = exports.parse = require('./decode');
 exports.encode = exports.stringify = require('./encode');
 
-},{"./decode":12,"./encode":13}],15:[function(require,module,exports){
+},{"./decode":13,"./encode":14}],16:[function(require,module,exports){
 (function (process,Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -4662,7 +4768,7 @@ delegate_to_session('flow');
 module.exports = Connection;
 
 }).call(this,require('_process'),require("buffer").Buffer)
-},{"./endpoint.js":17,"./errors.js":18,"./frames.js":20,"./log.js":22,"./sasl.js":25,"./session.js":26,"./transport.js":28,"./util.js":30,"_process":10,"buffer":4,"events":7,"net":3,"tls":3}],16:[function(require,module,exports){
+},{"./endpoint.js":18,"./errors.js":19,"./frames.js":21,"./log.js":23,"./sasl.js":26,"./session.js":27,"./transport.js":29,"./util.js":31,"_process":11,"buffer":5,"events":8,"net":4,"tls":4}],17:[function(require,module,exports){
 (function (process){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -4764,7 +4870,7 @@ Container.prototype.message = require('./message.js');
 module.exports = new Container();
 
 }).call(this,require('_process'))
-},{"./connection.js":15,"./filter.js":19,"./log.js":22,"./message.js":23,"./rpc.js":24,"./sasl.js":25,"./types.js":29,"./util.js":30,"./ws.js":31,"_process":10,"events":7,"net":3,"tls":3}],17:[function(require,module,exports){
+},{"./connection.js":16,"./filter.js":20,"./log.js":23,"./message.js":24,"./rpc.js":25,"./sasl.js":26,"./types.js":30,"./util.js":31,"./ws.js":32,"_process":11,"events":8,"net":4,"tls":4}],18:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -4875,7 +4981,7 @@ EndpointState.prototype.need_close = function () {
 
 module.exports = EndpointState;
 
-},{}],18:[function(require,module,exports){
+},{}],19:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -4927,7 +5033,7 @@ module.exports = {
     ConnectionError: ConnectionError
 };
 
-},{"util":36}],19:[function(require,module,exports){
+},{"util":37}],20:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -4953,7 +5059,7 @@ module.exports = {
     }
 };
 
-},{"./types.js":29}],20:[function(require,module,exports){
+},{"./types.js":30}],21:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5253,7 +5359,7 @@ define_frame(frames.TYPE_SASL, sasl_outcome);
 
 module.exports = frames;
 
-},{"./errors.js":18,"./types.js":29}],21:[function(require,module,exports){
+},{"./errors.js":19,"./types.js":30}],22:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -5600,7 +5706,7 @@ Receiver.prototype.set_credit_window = function(credit_window) {
 module.exports = {'Sender': Sender, 'Receiver':Receiver};
 
 }).call(this,require("buffer").Buffer)
-},{"./endpoint.js":17,"./frames.js":20,"./log.js":22,"./message.js":23,"./terminus.js":27,"buffer":4,"events":7,"util":36}],22:[function(require,module,exports){
+},{"./endpoint.js":18,"./frames.js":21,"./log.js":23,"./message.js":24,"./terminus.js":28,"buffer":5,"events":8,"util":37}],23:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5630,7 +5736,7 @@ module.exports = {
     'io' : debug('rhea:io')
 };
 
-},{"debug":5}],23:[function(require,module,exports){
+},{"debug":6}],24:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5891,7 +5997,7 @@ define_outcome({name:'modified',
 
 module.exports = message;
 
-},{"./log.js":22,"./types.js":29}],24:[function(require,module,exports){
+},{"./log.js":23,"./types.js":30}],25:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -6137,7 +6243,7 @@ module.exports = {
     client : function(connection, address) { return new Client(connection, address); }
 };
 
-},{"url":32}],25:[function(require,module,exports){
+},{"url":33}],26:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -6470,7 +6576,7 @@ module.exports = {
 };
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":18,"./frames.js":20,"./transport.js":28,"buffer":4}],26:[function(require,module,exports){
+},{"./errors.js":19,"./frames.js":21,"./transport.js":29,"buffer":5}],27:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -7134,7 +7240,7 @@ Session.prototype.on_transfer = function (frame) {
 module.exports = Session;
 
 }).call(this,require("buffer").Buffer)
-},{"./endpoint.js":17,"./frames.js":20,"./link.js":21,"./log.js":22,"./message.js":23,"./types.js":29,"./util.js":30,"buffer":4,"events":7}],27:[function(require,module,exports){
+},{"./endpoint.js":18,"./frames.js":21,"./link.js":22,"./log.js":23,"./message.js":24,"./types.js":30,"./util.js":31,"buffer":5,"events":8}],28:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -7210,7 +7316,7 @@ define_terminus(
 
 module.exports = terminus;
 
-},{"./types.js":29}],28:[function(require,module,exports){
+},{"./types.js":30}],29:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -7316,7 +7422,7 @@ Transport.prototype.read = function (buffer) {
 module.exports = Transport;
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":18,"./frames.js":20,"./log.js":22,"buffer":4}],29:[function(require,module,exports){
+},{"./errors.js":19,"./frames.js":21,"./log.js":23,"buffer":5}],30:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -8274,7 +8380,7 @@ add_type({name: 'error',
 module.exports = types;
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":18,"buffer":4}],30:[function(require,module,exports){
+},{"./errors.js":19,"buffer":5}],31:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -8353,7 +8459,7 @@ util.receiver_filter = function (filter) { return util.and(util.is_receiver, fil
 module.exports = util;
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":18,"buffer":4}],31:[function(require,module,exports){
+},{"./errors.js":19,"buffer":5}],32:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -8440,7 +8546,7 @@ module.exports = {
 };
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":4}],32:[function(require,module,exports){
+},{"buffer":5}],33:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -9174,7 +9280,7 @@ Url.prototype.parseHost = function() {
   if (host) this.hostname = host;
 };
 
-},{"./util":33,"punycode":11,"querystring":14}],33:[function(require,module,exports){
+},{"./util":34,"punycode":12,"querystring":15}],34:[function(require,module,exports){
 'use strict';
 
 module.exports = {
@@ -9192,7 +9298,7 @@ module.exports = {
   }
 };
 
-},{}],34:[function(require,module,exports){
+},{}],35:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -9217,14 +9323,14 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],35:[function(require,module,exports){
+},{}],36:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],36:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -9814,7 +9920,7 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":35,"_process":10,"inherits":34}],37:[function(require,module,exports){
+},{"./support/isBuffer":36,"_process":11,"inherits":35}],38:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -9876,48 +9982,61 @@ var util = require('./utilities.js');
       this.entityAttribs[entity] = entityAttribs[i].attrs || []
     }
   }
+  Topology.prototype.on = function (eventName, fn, key) {
+    if (eventName === 'updated')
+      this.addUpdatedAction(key, fn)
+  }
+  Topology.prototype.unregister = function (eventName, key) {
+    if (eventName === 'updated')
+      this.delUpdatedAction(key)
+  }
   Topology.prototype.nodeInfo = function () {
     return this._nodeInfo
   }
   Topology.prototype.get = function () {
-    this.connection.sendMgmtQuery("GET-MGMT-NODES")
-      .then( (function (response) {
-        response = response.response
-        if (Object.prototype.toString.call(response) === '[object Array]') {
-          var workInfo = {}
-          // if there is only one node, it will not be returned
-          if (response.length === 0) {
-            var parts = this.connection.getReceiverAddress().split('/')
-            parts[parts.length-1] = '$management'
-            response.push(parts.join('/'))
-          }
-          for (var i=0; i<response.length; ++i) {
-            workInfo[response[i]] = {};
-          }
-          var gotResponse = function (nodeName, entity, response) {
-            workInfo[nodeName][entity] = response
-          }
-          var q = QDR.queue(this.connection.availableQeueuDepth())
-          for (var id in workInfo) {
-            for (var entity in this.entityAttribs) {
-              q.defer((this.q_fetchNodeInfo).bind(this), id, entity, this.entityAttribs[entity], q, gotResponse)
+    return new Promise( (function (resolve, reject) {
+      this.connection.sendMgmtQuery("GET-MGMT-NODES")
+        .then( (function (response) {
+          response = response.response
+          if (Object.prototype.toString.call(response) === '[object Array]') {
+            var workInfo = {}
+            // if there is only one node, it will not be returned
+            if (response.length === 0) {
+              var parts = this.connection.getReceiverAddress().split('/')
+              parts[parts.length-1] = '$management'
+              response.push(parts.join('/'))
             }
-          }
-          q.await((function (error) {
-            // filter out nodes that have no connection info
-            if (this.filtering) {
-              for (var id in workInfo) {
-                if (!(workInfo[id]['connection'])) {
-                  this.flux = true
-                  delete workInfo[id]
-                }
+            for (var i=0; i<response.length; ++i) {
+              workInfo[response[i]] = {};
+            }
+            var gotResponse = function (nodeName, entity, response) {
+              workInfo[nodeName][entity] = response
+            }
+            var q = QDR.queue(this.connection.availableQeueuDepth())
+            for (var id in workInfo) {
+              for (var entity in this.entityAttribs) {
+                q.defer((this.q_fetchNodeInfo).bind(this), id, entity, this.entityAttribs[entity], q, gotResponse)
               }
             }
-            this._nodeInfo = util.copy(workInfo)
-            this.onDone(this._nodeInfo)
-          }).bind(this))
-        };
-      }).bind(this))
+            q.await((function (error) {
+              // filter out nodes that have no connection info
+              if (this.filtering) {
+                for (var id in workInfo) {
+                  if (!(workInfo[id]['connection'])) {
+                    this.flux = true
+                    delete workInfo[id]
+                  }
+                }
+              }
+              this._nodeInfo = util.copy(workInfo)
+              this.onDone(this._nodeInfo)
+              resolve(this._nodeInfo)
+            }).bind(this))
+          };
+        }).bind(this), function (error) {
+          reject(error)
+        })
+    }).bind(this))
   }
   Topology.prototype.onDone = function (result) {
     clearTimeout(this._getTimer)
@@ -10198,7 +10317,7 @@ var util = require('./utilities.js');
   }
 
 module.exports = Topology;
-},{"./utilities.js":38}],38:[function(require,module,exports){
+},{"./utilities.js":39}],39:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -10317,7 +10436,7 @@ module.exports = Utilities;
  */
 'use strict';
 
-var ConnectionManager = require('./connection.js')
+var ConnectionManager = require('./connection.js').ConnectionManager
 var Topology = require('./topology.js')
 var util = require('./utilities.js')
 
@@ -10327,29 +10446,35 @@ var util = require('./utilities.js')
   }
   Management.prototype.getSchema = function (callback) {
     var self = this
-    this.connection.sendMgmtQuery("GET-SCHEMA")
-      .then(function (responseAndContext) {
-        var response = responseAndContext.response
-        for (var entityName in response.entityTypes) {
-          var entity = response.entityTypes[entityName]
-          if (entity.deprecated) {
-            // deprecated entity
-            delete response.entityTypes[entityName]
-          } else {
-            for (var attributeName in entity.attributes) {
-              var attribute = entity.attributes[attributeName]
-              if (attribute.deprecated) {
-                // deprecated attribute
-                delete response.entityTypes[entityName].attributes[attributeName]
+    return new Promise(function (resolve, reject) {
+      self.connection.sendMgmtQuery("GET-SCHEMA")
+        .then(function (responseAndContext) {
+          var response = responseAndContext.response
+          for (var entityName in response.entityTypes) {
+            var entity = response.entityTypes[entityName]
+            if (entity.deprecated) {
+              // deprecated entity
+              delete response.entityTypes[entityName]
+            } else {
+              for (var attributeName in entity.attributes) {
+                var attribute = entity.attributes[attributeName]
+                if (attribute.deprecated) {
+                  // deprecated attribute
+                  delete response.entityTypes[entityName].attributes[attributeName]
+                }
               }
             }
           }
-        }
-        self.connection.setSchema(response)
-        callback(response)
-      }, function (error) {
-        callback(error)
-      })
+          self.connection.setSchema(response)
+          if (callback)
+            callback(response)
+          resolve(response)
+        }, function (error) {
+          if (callback)
+            callback(error)
+          reject(error)
+        })
+    })
   }
   Management.prototype.schema = function () {
     return this.connection.schema
@@ -10360,4 +10485,4 @@ module.exports = {
     Utilities: util
 }
 
-},{"./connection.js":1,"./topology.js":37,"./utilities.js":38}]},{},[]);
+},{"./connection.js":1,"./topology.js":38,"./utilities.js":39}]},{},[]);

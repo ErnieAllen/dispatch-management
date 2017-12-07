@@ -59,48 +59,61 @@ var util = require('./utilities.js');
       this.entityAttribs[entity] = entityAttribs[i].attrs || []
     }
   }
+  Topology.prototype.on = function (eventName, fn, key) {
+    if (eventName === 'updated')
+      this.addUpdatedAction(key, fn)
+  }
+  Topology.prototype.unregister = function (eventName, key) {
+    if (eventName === 'updated')
+      this.delUpdatedAction(key)
+  }
   Topology.prototype.nodeInfo = function () {
     return this._nodeInfo
   }
   Topology.prototype.get = function () {
-    this.connection.sendMgmtQuery("GET-MGMT-NODES")
-      .then( (function (response) {
-        response = response.response
-        if (Object.prototype.toString.call(response) === '[object Array]') {
-          var workInfo = {}
-          // if there is only one node, it will not be returned
-          if (response.length === 0) {
-            var parts = this.connection.getReceiverAddress().split('/')
-            parts[parts.length-1] = '$management'
-            response.push(parts.join('/'))
-          }
-          for (var i=0; i<response.length; ++i) {
-            workInfo[response[i]] = {};
-          }
-          var gotResponse = function (nodeName, entity, response) {
-            workInfo[nodeName][entity] = response
-          }
-          var q = QDR.queue(this.connection.availableQeueuDepth())
-          for (var id in workInfo) {
-            for (var entity in this.entityAttribs) {
-              q.defer((this.q_fetchNodeInfo).bind(this), id, entity, this.entityAttribs[entity], q, gotResponse)
+    return new Promise( (function (resolve, reject) {
+      this.connection.sendMgmtQuery("GET-MGMT-NODES")
+        .then( (function (response) {
+          response = response.response
+          if (Object.prototype.toString.call(response) === '[object Array]') {
+            var workInfo = {}
+            // if there is only one node, it will not be returned
+            if (response.length === 0) {
+              var parts = this.connection.getReceiverAddress().split('/')
+              parts[parts.length-1] = '$management'
+              response.push(parts.join('/'))
             }
-          }
-          q.await((function (error) {
-            // filter out nodes that have no connection info
-            if (this.filtering) {
-              for (var id in workInfo) {
-                if (!(workInfo[id]['connection'])) {
-                  this.flux = true
-                  delete workInfo[id]
-                }
+            for (var i=0; i<response.length; ++i) {
+              workInfo[response[i]] = {};
+            }
+            var gotResponse = function (nodeName, entity, response) {
+              workInfo[nodeName][entity] = response
+            }
+            var q = QDR.queue(this.connection.availableQeueuDepth())
+            for (var id in workInfo) {
+              for (var entity in this.entityAttribs) {
+                q.defer((this.q_fetchNodeInfo).bind(this), id, entity, this.entityAttribs[entity], q, gotResponse)
               }
             }
-            this._nodeInfo = util.copy(workInfo)
-            this.onDone(this._nodeInfo)
-          }).bind(this))
-        };
-      }).bind(this))
+            q.await((function (error) {
+              // filter out nodes that have no connection info
+              if (this.filtering) {
+                for (var id in workInfo) {
+                  if (!(workInfo[id]['connection'])) {
+                    this.flux = true
+                    delete workInfo[id]
+                  }
+                }
+              }
+              this._nodeInfo = util.copy(workInfo)
+              this.onDone(this._nodeInfo)
+              resolve(this._nodeInfo)
+            }).bind(this))
+          };
+        }).bind(this), function (error) {
+          reject(error)
+        })
+    }).bind(this))
   }
   Topology.prototype.onDone = function (result) {
     clearTimeout(this._getTimer)
