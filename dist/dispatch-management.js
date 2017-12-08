@@ -153,9 +153,9 @@ var Correlator = require('./correlator.js')
         clearTimeout(timer)
         this.version = this.connection.properties ? this.connection.properties.version : '0.1.0'
         // in case this connection dies
-        this.connection.on('disconnected', this.on_disconnected)
+        rhea.on('disconnected', this.on_disconnected)
         // in case this connection dies and is then reconnected automatically
-        this.connection.on('connection_open', this.on_connection_open)
+        rhea.on('connection_open', this.on_connection_open)
         // receive messages here
         this.connection.on('message', this.on_message);
         resolve(context)
@@ -259,7 +259,8 @@ var Correlator = require('./correlator.js')
         if (options.test) {
           context.connection.close();
           this.connection = null
-        }
+        } else
+          this.on_connection_open()
         var res = {context: context}
         if (callback)
           callback(res)
