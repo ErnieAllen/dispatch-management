@@ -4,14 +4,27 @@ Wrapper for connecting to and managing a qpid dispatch router.
 - Correlates response messages with the calling function.
 - Sets up sender and a dynamic receiver to $management.
 - Provides a promise interface as well as a callback interface.
-- Provides ability to periodically poll for changed data and notifications for when polls are complete.
+- Provides ability to periodically poll and notifications
 - Provides ability to make management method calls UPDATE/ADD/DELETE
 
 This library uses the rhea javascript client library.
 
 npm install dispatch-management --save
+
 Start a dispatch router with an http listener on port 5673
 
+    router {
+        mode: standalone
+        id: QDR
+    }
+    listener {
+        port: 5673
+        host: 0.0.0.0
+        http: true
+        role: normal
+        saslMechanisms: ANONYMOUS
+    }
+    
 in your index.html:
 
     <script src="node_modules/dispatch-management/dist/dispatch-management.min.js" type="text/javascript"></script>
@@ -34,7 +47,10 @@ in a .js file:
         console.log("connected to dispatch network on 0.0.0.0:5673")
         // example of callback interface
         management.getSchema(function (schema) {
-          console.log("got schema")
+          if (!schema.error)
+            console.log("got schema")
+          else
+            console.log("unable to get schema")
         })
       }, function (error) {
         console.log("unable to connect" + error.msg)      
