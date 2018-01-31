@@ -103,5 +103,5 @@
     "browserify": "browserify -r .:dispatch-management -o dist/dispatch-management.js",
     "uglify": "uglifyjs --source-map --output dist/dispatch-management.min.js dist/dispatch-management.js"
   },
-  "version": "0.1.13"
+  "version": "0.1.14"
 }
