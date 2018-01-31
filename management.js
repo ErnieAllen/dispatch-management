@@ -15,51 +15,53 @@
  */
 'use strict';
 
-var ConnectionManager = require('./connection.js').ConnectionManager
-var Topology = require('./topology.js')
-var util = require('./utilities.js')
+/* global Promise */
 
-  var Management = function (protocol) {
-    this.connection = new ConnectionManager(protocol)
-    this.topology = new Topology(this.connection)
-  }
-  Management.prototype.getSchema = function (callback) {
-    var self = this
-    return new Promise(function (resolve, reject) {
-      self.connection.sendMgmtQuery("GET-SCHEMA")
-        .then(function (responseAndContext) {
-          var response = responseAndContext.response
-          for (var entityName in response.entityTypes) {
-            var entity = response.entityTypes[entityName]
-            if (entity.deprecated) {
-              // deprecated entity
-              delete response.entityTypes[entityName]
-            } else {
-              for (var attributeName in entity.attributes) {
-                var attribute = entity.attributes[attributeName]
-                if (attribute.deprecated) {
-                  // deprecated attribute
-                  delete response.entityTypes[entityName].attributes[attributeName]
-                }
+var ConnectionManager = require('./connection.js').ConnectionManager;
+var Topology = require('./topology.js');
+var util = require('./utilities.js');
+
+var Management = function (protocol) {
+  this.connection = new ConnectionManager(protocol);
+  this.topology = new Topology(this.connection);
+};
+Management.prototype.getSchema = function (callback) {
+  var self = this;
+  return new Promise(function (resolve, reject) {
+    self.connection.sendMgmtQuery('GET-SCHEMA')
+      .then(function (responseAndContext) {
+        var response = responseAndContext.response;
+        for (var entityName in response.entityTypes) {
+          var entity = response.entityTypes[entityName];
+          if (entity.deprecated) {
+            // deprecated entity
+            delete response.entityTypes[entityName];
+          } else {
+            for (var attributeName in entity.attributes) {
+              var attribute = entity.attributes[attributeName];
+              if (attribute.deprecated) {
+                // deprecated attribute
+                delete response.entityTypes[entityName].attributes[attributeName];
               }
             }
           }
-          self.connection.setSchema(response)
-          if (callback)
-            callback(response)
-          resolve(response)
-        }, function (error) {
-          if (callback)
-            callback(error)
-          reject(error)
-        })
-    })
-  }
-  Management.prototype.schema = function () {
-    return this.connection.schema
-  }
+        }
+        self.connection.setSchema(response);
+        if (callback)
+          callback(response);
+        resolve(response);
+      }, function (error) {
+        if (callback)
+          callback(error);
+        reject(error);
+      });
+  });
+};
+Management.prototype.schema = function () {
+  return this.connection.schema;
+};
 
 module.exports = {
-    Management: Management,
-    Utilities: util
-}
+  Management: Management,
+  Utilities: util
+};

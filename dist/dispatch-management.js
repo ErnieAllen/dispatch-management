@@ -15,394 +15,395 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
  * limitations under the License.
  */
 'use strict';
+/* global Promise */
 
-var rhea = require('rhea')
-var Correlator = require('./correlator.js')
+var rhea = require('rhea');
+var Correlator = require('./correlator.js');
 
-  var ConnectionManager = function (protocol) {
-    this.sender = undefined
-    this.receiver = undefined
-    this.connection = undefined
-    this.version = undefined
-    this.errorText = undefined
-    this.protocol = protocol
-    this.schema = undefined
-    this.connectActions = []
-    this.disconnectActions = []
+var ConnectionManager = function (protocol) {
+  this.sender = undefined;
+  this.receiver = undefined;
+  this.connection = undefined;
+  this.version = undefined;
+  this.errorText = undefined;
+  this.protocol = protocol;
+  this.schema = undefined;
+  this.connectActions = [];
+  this.disconnectActions = [];
 
-    this.correlator = new Correlator()
+  this.correlator = new Correlator();
 
-    this.on_message = (function (context) {
-      this.correlator.resolve(context);
-    }).bind(this)
-    this.on_disconnected = (function (context) {
-      this.errorText = "Disconnected"
-      this.executeDisconnectActions(this.errorText)
-    }).bind(this)
-    this.on_connection_open = (function (context) {
-      this.executeConnectActions()
-    }).bind(this)
+  this.on_message = (function (context) {
+    this.correlator.resolve(context);
+  }).bind(this);
+  this.on_disconnected = (function () {
+    this.errorText = 'Disconnected';
+    this.executeDisconnectActions(this.errorText);
+  }).bind(this);
+  this.on_connection_open = (function () {
+    this.executeConnectActions();
+  }).bind(this);
+};
+
+ConnectionManager.prototype.versionCheck = function (minVer) {
+  var verparts = this.version.split('.');
+  var minparts = minVer.split('.');
+  try {
+    for (var i=0; i<minparts.length; ++i) {
+      if (parseInt(minVer[i] > parseInt(verparts[i])))
+        return false;
+    }
+  } catch (e) {
+    return false;
   }
+  return true;
+};
+ConnectionManager.prototype.addConnectAction = function(action) {
+  if (typeof action === 'function') {
+    this.delConnectAction(action);
+    this.connectActions.push(action);
+  }
+};
 
-  ConnectionManager.prototype.versionCheck = function (minVer) {
-    var verparts = this.version.split('.')
-    var minparts = minVer.split('.')
+ConnectionManager.prototype.addDisconnectAction = function(action) {
+  if (typeof action === 'function') {
+    this.delDisconnectAction(action);
+    this.disconnectActions.push(action);
+  }
+};
+ConnectionManager.prototype.delConnectAction = function(action) {
+  if (typeof action === 'function') {
+    var index = this.connectActions.indexOf(action);
+    if (index >= 0)
+      this.connectActions.splice(index, 1);
+  }
+};
+ConnectionManager.prototype.delDisconnectAction = function(action) {
+  if (typeof action === 'function') {
+    var index = this.disconnectActions.indexOf(action);
+    if (index >= 0)
+      this.disconnectActions.splice(index, 1);
+  }
+};
+ConnectionManager.prototype.executeConnectActions = function() {
+  this.connectActions.forEach(function(action) {
     try {
-      for (var i=0; i<minparts.length; ++i) {
-        if (parseInt(minVer[i] > parseInt(verparts[i])))
-          return false
-      }
+      action();
     } catch (e) {
-      return false
+      // in case the page that registered the handler has been unloaded
     }
-    return true
-  }
-  ConnectionManager.prototype.addConnectAction = function(action) {
-    if (typeof action === "function") {
-      this.delConnectAction(action)
-      this.connectActions.push(action);
+  });
+  this.connectActions = [];
+};
+ConnectionManager.prototype.executeDisconnectActions = function(message) {
+  this.disconnectActions.forEach(function(action) {
+    try {
+      action(message);
+    } catch (e) {
+      // in case the page that registered the handler has been unloaded
     }
+  });
+  this.disconnectActions = [];
+};
+ConnectionManager.prototype.on = function (eventType, fn) {
+  if (eventType === 'connected') {
+    this.addConnectAction(fn);
+  } else if (eventType === 'disconnected') {
+    this.addDisconnectAction(fn);
+  } else {
+    console.log('unknown event type ' + eventType);
   }
+};
 
-  ConnectionManager.prototype.addDisconnectAction = function(action) {
-    if (typeof action === "function") {
-      this.delDisconnectAction(action)
-      this.disconnectActions.push(action);
-    }
-  }
-  ConnectionManager.prototype.delConnectAction = function(action) {
-    if (typeof action === "function") {
-      var index = this.connectActions.indexOf(action)
-      if (index >= 0)
-        this.connectActions.splice(index, 1)
-    }
-  }
-  ConnectionManager.prototype.delDisconnectAction = function(action) {
-    if (typeof action === "function") {
-      var index = this.disconnectActions.indexOf(action)
-      if (index >= 0)
-        this.disconnectActions.splice(index, 1)
-    }
-  }
-  ConnectionManager.prototype.executeConnectActions = function() {
-    this.connectActions.forEach(function(action) {
-      try {
-        action();
-      } catch (e) {
-        // in case the page that registered the handler has been unloaded
-      }
-    });
-    this.connectActions = [];
-  }
-  ConnectionManager.prototype.executeDisconnectActions = function(message) {
-    this.disconnectActions.forEach(function(action) {
-      try {
-        action(message)
-      } catch (e) {
-        // in case the page that registered the handler has been unloaded
-      }
-    });
-    this.disconnectActions = [];
-  }
-  ConnectionManager.prototype.on = function (eventType, fn) {
-    if (eventType === 'connected') {
-      this.addConnectAction(fn)
-    } else if (eventType === 'disconnected') {
-      this.addDisconnectAction(fn)
+ConnectionManager.prototype.setSchema = function (schema) {
+  this.schema = schema;
+};
+ConnectionManager.prototype.is_connected = function () {
+  return this.connection &&
+        this.sender &&
+        this.receiver &&
+        this.receiver.remote &&
+        this.receiver.remote.attach  &&
+        this.receiver.remote.attach.source &&
+        this.receiver.remote.attach.source.address &&
+        this.connection.is_open();
+};
+ConnectionManager.prototype.disconnect = function () {
+  if (this.sender)
+    this.sender.close();
+  if (this.receiver)
+    this.receiver.close();
+  if (this.connection)
+    this.connection.close();
+};
+
+ConnectionManager.prototype.createSenderReceiver = function (options) {
+  return new Promise( (function (resolve, reject) {
+    var timeout = options.timeout || 10000;
+    // set a timer in case the setup takes too long
+    var giveUp = (function () {
+      this.connection.removeListener('receiver_open', receiver_open);
+      this.connection.removeListener('sendable', sendable);
+      this.errorText = 'timed out creating senders and receivers';
+      reject(Error(this.errorText));
+    }).bind(this);
+    var timer = setTimeout(giveUp, timeout);
+
+    // register an event hander for when the setup is complete
+    var sendable = (function (context) {
+      clearTimeout(timer);
+      this.version = this.connection.properties ? this.connection.properties.version : '0.1.0';
+      // in case this connection dies
+      rhea.on('disconnected', this.on_disconnected);
+      // in case this connection dies and is then reconnected automatically
+      rhea.on('connection_open', this.on_connection_open);
+      // receive messages here
+      this.connection.on('message', this.on_message);
+      resolve(context);
+    }).bind(this);
+    this.connection.once('sendable', sendable);
+
+    // Now actually createt the sender and receiver.
+    // register an event handler for when the receiver opens
+    var receiver_open = (function () {
+      // once the receiver is open, create the sender
+      if (options.sender_address)
+        this.sender = this.connection.open_sender(options.sender_address);
+      else
+        this.sender = this.connection.open_sender();
+    }).bind(this);
+    this.connection.once('receiver_open', receiver_open);
+    // create a dynamic receiver
+    this.receiver = this.connection.open_receiver({source: {dynamic: true}});
+
+  }).bind(this));
+};
+
+ConnectionManager.prototype.connect = function (options) {
+  return new Promise( (function (resolve, reject) {
+    var finishConnecting = function () {
+      this.createSenderReceiver(options)
+        .then( function (results) {
+          resolve(results);
+        }, function (error) {
+          reject(error);
+        });
+    };
+
+    if (!this.connection) {
+      options.test = false;  // if you didn't want a connection, you should have called testConnect() and not connect()
+      this.testConnect(options)
+        .then( (function () {
+          finishConnecting.call(this);
+        }).bind(this), (function () {
+          // connect failed or timed out
+          this.errorText = 'Unable to connect';
+          this.executeDisconnectActions(this.errorText);
+          reject(Error(this.errorText));
+        }).bind(this));
     } else {
-      console.log('unknown event type ' + eventType)
+      finishConnecting.call(this);
     }
-  }
+  }).bind(this));
+};
+ConnectionManager.prototype.getReceiverAddress = function () {
+  return this.receiver.remote.attach.source.address;
+};
 
-  ConnectionManager.prototype.setSchema = function (schema) {
-    this.schema = schema
-  }
-  ConnectionManager.prototype.is_connected = function () {
-    return this.connection &&
-          this.sender &&
-          this.receiver &&
-          this.receiver.remote &&
-          this.receiver.remote.attach  &&
-          this.receiver.remote.attach.source &&
-          this.receiver.remote.attach.source.address &&
-          this.connection.is_open()
-  }
-  ConnectionManager.prototype.disconnect = function () {
-    if (this.sender)
-      this.sender.close()
-    if (this.receiver)
-      this.receiver.close()
-    if (this.connection)
-      this.connection.close();
-  }
-
-  ConnectionManager.prototype.createSenderReceiver = function (options) {
-    return new Promise( (function (resolve, reject) {
-      var timeout = options.timeout || 10000
-      // set a timer in case the setup takes too long
-      var giveUp = (function () {
-        this.connection.removeListener('receiver_open', receiver_open)
-        this.connection.removeListener('sendable', sendable)
-        this.errorText = 'timed out creating senders and receivers'
-        reject(Error(this.errorText))
-      }).bind(this)
-      var timer = setTimeout(giveUp, timeout)
-
-      // register an event hander for when the setup is complete
-      var sendable = (function (context) {
-        clearTimeout(timer)
-        this.version = this.connection.properties ? this.connection.properties.version : '0.1.0'
-        // in case this connection dies
-        rhea.on('disconnected', this.on_disconnected)
-        // in case this connection dies and is then reconnected automatically
-        rhea.on('connection_open', this.on_connection_open)
-        // receive messages here
-        this.connection.on('message', this.on_message);
-        resolve(context)
-      }).bind(this)
-      this.connection.once('sendable', sendable)
-
-      // Now actually createt the sender and receiver.
-      // register an event handler for when the receiver opens
-      var receiver_open = (function (context) {
-        // once the receiver is open, create the sender
-        if (options.sender_address)
-          this.sender = this.connection.open_sender(options.sender_address)
-        else
-          this.sender = this.connection.open_sender()
-      }).bind(this)
-      this.connection.once('receiver_open', receiver_open)
-      // create a dynamic receiver
-      this.receiver = this.connection.open_receiver({source: {dynamic: true}});
-
-    }).bind(this))
-  }
-
-  ConnectionManager.prototype.connect = function (options) {
-    return new Promise( (function (resolve, reject) {
-      var finishConnecting = function () {
-        this.createSenderReceiver(options)
-          .then( function (results) {
-            resolve(results)
-          }, function (error) {
-            reject(error)
-          })
-      }
-
-      if (!this.connection) {
-        options.test = false  // if you didn't want a connection, you should have called testConnect() and not connect()
-        this.testConnect(options)
-          .then( (function (results) {
-            finishConnecting.call(this)
-          }).bind(this), (function (error) {
-              // connect failed or timed out
-              this.errorText = "Unable to connect"
-              this.executeDisconnectActions(this.errorText)
-              reject(Error(this.errorText))
-            }).bind(this))
-      } else {
-        finishConnecting.call(this)
-      }
-    }).bind(this))
-  }
-  ConnectionManager.prototype.getReceiverAddress = function () {
-    return this.receiver.remote.attach.source.address
-  }
-
-  // Try to connect using the options.
-  // if options.test === true -> close the connection if it succeeded and resolve the promise
-  // if the connection attempt fails or times out, reject the promise regardless of options.test
-  ConnectionManager.prototype.testConnect = function (options, callback) {
-    return new Promise ( (function (resolve, reject) {
-      var timeout = options.timeout || 10000
-      var reconnect = options.reconnect || false  // in case options.reconnect is undefined
-      var baseAddress = options.address + ':' + options.port;
-      if (options.linkRouteAddress) {
-        baseAddress += ('/'+options.linkRouteAddress)
-      }
-      var wsprotocol = this.protocol === "https" ? "wss" : "ws"
-
-      if (this.connection) {
-        delete this.connection
-        this.connection = null
-      }
-
-      var ws = rhea.websocket_connect(WebSocket)
-      var c = {
-        connection_details: new ws(wsprotocol + "://" + baseAddress, ["binary"]),
-        reconnect: reconnect,
-        properties: options.properties || {console_identifier: "Dispatch console"}
-      }
-      if (options.hostname)
-        c.hostname = options.hostname
-
-      // set a timeout
-      var disconnected = (function () {
-        clearTimeout(timer)
-        rhea.removeListener('disconnected', disconnected)
-        rhea.removeListener('connection_open', connection_open)
-        this.connection = null
-        var rej = "failed to connect"
-        if (callback)
-          callback({error: rej})
-        reject(Error(rej))
-      }).bind(this)
-      var timer = setTimeout(disconnected, timeout)
-
-      // the event handler for when the connection opens
-      var connection_open = (function (context) {
-        clearTimeout(timer)
-        // prevent future disconnects from calling reject
-        rhea.removeListener('disconnected', disconnected)
-
-        // we were just checking. we don't really want a connection
-        if (options.test) {
-          context.connection.close();
-          this.connection = null
-        } else
-          this.on_connection_open()
-        var res = {context: context}
-        if (callback)
-          callback(res)
-        resolve(res)
-      }).bind(this)
-
-      // register an event handler for when the connection opens
-      rhea.once('connection_open', connection_open)
-
-      // register an event handler for if the connection fails to open
-      rhea.once('disconnected', disconnected)
-
-      // attempt the connection
-      this.connection = rhea.connect(c)
-    }).bind(this))
-  }
-
-  ConnectionManager.prototype.sendMgmtQuery = function (operation) {
-    return this.send([], "/$management", operation)
-  }
-  ConnectionManager.prototype.sendQuery = function (toAddr, entity, attrs, operation) {
-    operation = operation || "QUERY"
-    var fullAddr = this._fullAddr(toAddr);
-    var body = {attributeNames: attrs || []}
-    return this.send(body, fullAddr, operation, this.schema.entityTypes[entity].fullyQualifiedType);
-  }
-  ConnectionManager.prototype.send = function (body, to, operation, entityType) {
-    var application_properties = {
-      operation: operation,
-      type: "org.amqp.management",
-      name: "self"
+// Try to connect using the options.
+// if options.test === true -> close the connection if it succeeded and resolve the promise
+// if the connection attempt fails or times out, reject the promise regardless of options.test
+ConnectionManager.prototype.testConnect = function (options, callback) {
+  return new Promise ( (function (resolve, reject) {
+    var timeout = options.timeout || 10000;
+    var reconnect = options.reconnect || false;  // in case options.reconnect is undefined
+    var baseAddress = options.address + ':' + options.port;
+    if (options.linkRouteAddress) {
+      baseAddress += ('/'+options.linkRouteAddress);
     }
-    if (entityType)
-      application_properties.entityType = entityType;
-    return this._send(body, to, application_properties)
-  }
-  ConnectionManager.prototype.sendMethod = function (toAddr, entity, attrs, operation, props) {
-    var fullAddr = this._fullAddr(toAddr);
-    var application_properties = {
-      operation: operation,
+    var wsprotocol = location.protocol === 'https' ? 'wss' : 'ws';
+
+    if (this.connection) {
+      delete this.connection;
+      this.connection = null;
     }
-    if (entity) {
-      application_properties.type = this.schema.entityTypes[entity].fullyQualifiedType
-    }
-    if (attrs.name)
-      application_properties.name = attrs.name
-    else if (attrs.identity)
-      application_properties.identity = attrs.identity
-    if (props) {
-      jQuery.extend(application_properties, props)
-    }
-    return this._send(attrs, fullAddr, application_properties)
+
+    var ws = rhea.websocket_connect(WebSocket);
+    var c = {
+      connection_details: new ws(wsprotocol + '://' + baseAddress, ['binary']),
+      reconnect: reconnect,
+      properties: options.properties || {console_identifier: 'Dispatch console'}
+    };
+    if (options.hostname)
+      c.hostname = options.hostname;
+
+    // set a timeout
+    var disconnected = (function () {
+      clearTimeout(timer);
+      rhea.removeListener('disconnected', disconnected);
+      rhea.removeListener('connection_open', connection_open);
+      this.connection = null;
+      var rej = 'failed to connect';
+      if (callback)
+        callback({error: rej});
+      reject(Error(rej));
+    }).bind(this);
+    var timer = setTimeout(disconnected, timeout);
+
+    // the event handler for when the connection opens
+    var connection_open = (function (context) {
+      clearTimeout(timer);
+      // prevent future disconnects from calling reject
+      rhea.removeListener('disconnected', disconnected);
+
+      // we were just checking. we don't really want a connection
+      if (options.test) {
+        context.connection.close();
+        this.connection = null;
+      } else
+        this.on_connection_open();
+      var res = {context: context};
+      if (callback)
+        callback(res);
+      resolve(res);
+    }).bind(this);
+
+    // register an event handler for when the connection opens
+    rhea.once('connection_open', connection_open);
+
+    // register an event handler for if the connection fails to open
+    rhea.once('disconnected', disconnected);
+
+    // attempt the connection
+    this.connection = rhea.connect(c);
+  }).bind(this));
+};
+
+ConnectionManager.prototype.sendMgmtQuery = function (operation) {
+  return this.send([], '/$management', operation);
+};
+ConnectionManager.prototype.sendQuery = function (toAddr, entity, attrs, operation) {
+  operation = operation || 'QUERY';
+  var fullAddr = this._fullAddr(toAddr);
+  var body = {attributeNames: attrs || []};
+  return this.send(body, fullAddr, operation, this.schema.entityTypes[entity].fullyQualifiedType);
+};
+ConnectionManager.prototype.send = function (body, to, operation, entityType) {
+  var application_properties = {
+    operation: operation,
+    type: 'org.amqp.management',
+    name: 'self'
+  };
+  if (entityType)
+    application_properties.entityType = entityType;
+  return this._send(body, to, application_properties);
+};
+ConnectionManager.prototype.sendMethod = function (toAddr, entity, attrs, operation, props) {
+  var fullAddr = this._fullAddr(toAddr);
+  var application_properties = {
+    operation: operation,
+  };
+  if (entity) {
+    application_properties.type = this.schema.entityTypes[entity].fullyQualifiedType;
   }
-
-  ConnectionManager.prototype._send = function (body, to, application_properties) {
-    var _correlationId = this.correlator.corr()
-    var self = this
-    return new Promise(function(resolve, reject) {
-      self.correlator.register(_correlationId, resolve, reject)
-      self.sender.send({
-        body: body,
-        to: to,
-        reply_to: self.receiver.remote.attach.source.address,
-        correlation_id: _correlationId,
-        application_properties: application_properties
-      })
-    })
+  if (attrs.name)
+    application_properties.name = attrs.name;
+  else if (attrs.identity)
+    application_properties.identity = attrs.identity;
+  if (props) {
+    for (var attrname in props) { application_properties[attrname] = props[attrname]; }
   }
+  return this._send(attrs, fullAddr, application_properties);
+};
 
-  ConnectionManager.prototype._fullAddr = function(toAddr) {
-    var toAddrParts = toAddr.split('/');
-    toAddrParts.shift()
-    var fullAddr = toAddrParts.join('/');
-    return fullAddr;
-  }
+ConnectionManager.prototype._send = function (body, to, application_properties) {
+  var _correlationId = this.correlator.corr();
+  var self = this;
+  return new Promise(function(resolve, reject) {
+    self.correlator.register(_correlationId, resolve, reject);
+    self.sender.send({
+      body: body,
+      to: to,
+      reply_to: self.receiver.remote.attach.source.address,
+      correlation_id: _correlationId,
+      application_properties: application_properties
+    });
+  });
+};
 
-  ConnectionManager.prototype.availableQeueuDepth = function() {
-    return this.correlator.depth()
-  }
+ConnectionManager.prototype._fullAddr = function(toAddr) {
+  var toAddrParts = toAddr.split('/');
+  toAddrParts.shift();
+  var fullAddr = toAddrParts.join('/');
+  return fullAddr;
+};
 
-  function ConnectionException(message) {
-    this.message = message
-    this.name = 'ConnectionException'
-  }
+ConnectionManager.prototype.availableQeueuDepth = function() {
+  return this.correlator.depth();
+};
 
-exports.ConnectionManager = ConnectionManager
-exports.ConnectionException = ConnectionException
+function ConnectionException(message) {
+  this.message = message;
+  this.name = 'ConnectionException';
+}
 
-},{"./correlator.js":2,"rhea":17}],2:[function(require,module,exports){
-  /*
-   * Copyright 2017 Red Hat Inc.
-   *
-   * Licensed under the Apache License, Version 2.0 (the "License");
-   * you may not use this file except in compliance with the License.
-   * You may obtain a copy of the License at
-   *
-   *     http://www.apache.org/licenses/LICENSE-2.0
-   *
-   * Unless required by applicable law or agreed to in writing, software
-   * distributed under the License is distributed on an "AS IS" BASIS,
-   * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   * See the License for the specific language governing permissions and
-   * limitations under the License.
-   */
-  'use strict';
+exports.ConnectionManager = ConnectionManager;
+exports.ConnectionException = ConnectionException;
 
-var util = require('./utilities.js')
+},{"./correlator.js":2,"rhea":18}],2:[function(require,module,exports){
+/*
+  * Copyright 2017 Red Hat Inc.
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+  * You may obtain a copy of the License at
+  *
+  *     http://www.apache.org/licenses/LICENSE-2.0
+  *
+  * Unless required by applicable law or agreed to in writing, software
+  * distributed under the License is distributed on an "AS IS" BASIS,
+  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
+'use strict';
+
+var util = require('./utilities.js');
 
 var Correlator = function () {
-    this._objects = {}
-    this._correlationID = 0
-    this.maxCorrelatorDepth = 10
-    this.lostConnection = false
+  this._objects = {};
+  this._correlationID = 0;
+  this.maxCorrelatorDepth = 10;
+  this.lostConnection = false;
 
-  }
-  Correlator.prototype.corr = function () {
-    return ++(this._correlationID) + ""
-  }
-  // Associate this correlation id with the promise's resolve and reject methods
-  Correlator.prototype.register = function (id, resolve, reject) {
-    this._objects[id] = {resolver: resolve, rejector: reject}
-  }
-  // Call the promise's resolve method.
-  // This is called by rhea's receiver.on('message') function
-  Correlator.prototype.resolve = function (context) {
-    var correlationID = context.message.correlation_id;
-    // call the promise's resolve function with a copy of the rhea response (so we don't keep any references to internal rhea data)
-    this._objects[correlationID].resolver({response: util.copy(context.message.body), context: context});
-    delete this._objects[correlationID];
-  }
-  Correlator.prototype.reject = function (id, error) {
-    this._objects[id].rejector(error);
-    delete this._objects[id];
-  }
-  // Return the number of requests that can be sent before we start queuing requests
-  Correlator.prototype.depth = function () {
-    return Math.max(1, this.maxCorrelatorDepth - Object.keys(this._objects).length)
-  }
+};
+Correlator.prototype.corr = function () {
+  return ++(this._correlationID) + '';
+};
+// Associate this correlation id with the promise's resolve and reject methods
+Correlator.prototype.register = function (id, resolve, reject) {
+  this._objects[id] = {resolver: resolve, rejector: reject};
+};
+// Call the promise's resolve method.
+// This is called by rhea's receiver.on('message') function
+Correlator.prototype.resolve = function (context) {
+  var correlationID = context.message.correlation_id;
+  // call the promise's resolve function with a copy of the rhea response (so we don't keep any references to internal rhea data)
+  this._objects[correlationID].resolver({response: util.copy(context.message.body), context: context});
+  delete this._objects[correlationID];
+};
+Correlator.prototype.reject = function (id, error) {
+  this._objects[id].rejector(error);
+  delete this._objects[id];
+};
+// Return the number of requests that can be sent before we start queuing requests
+Correlator.prototype.depth = function () {
+  return Math.max(1, this.maxCorrelatorDepth - Object.keys(this._objects).length);
+};
 
-module.exports = Correlator
+module.exports = Correlator;
 
-},{"./utilities.js":39}],3:[function(require,module,exports){
+},{"./utilities.js":40}],3:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -2236,7 +2237,143 @@ function numberIsNaN (obj) {
   return obj !== obj // eslint-disable-line no-self-compare
 }
 
-},{"base64-js":3,"ieee754":9}],6:[function(require,module,exports){
+},{"base64-js":3,"ieee754":10}],6:[function(require,module,exports){
+// https://d3js.org/d3-queue/ Version 3.0.7. Copyright 2017 Mike Bostock.
+(function (global, factory) {
+	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
+	typeof define === 'function' && define.amd ? define(['exports'], factory) :
+	(factory((global.d3 = global.d3 || {})));
+}(this, (function (exports) { 'use strict';
+
+var slice = [].slice;
+
+var noabort = {};
+
+function Queue(size) {
+  this._size = size;
+  this._call =
+  this._error = null;
+  this._tasks = [];
+  this._data = [];
+  this._waiting =
+  this._active =
+  this._ended =
+  this._start = 0; // inside a synchronous task callback?
+}
+
+Queue.prototype = queue.prototype = {
+  constructor: Queue,
+  defer: function(callback) {
+    if (typeof callback !== "function") throw new Error("invalid callback");
+    if (this._call) throw new Error("defer after await");
+    if (this._error != null) return this;
+    var t = slice.call(arguments, 1);
+    t.push(callback);
+    ++this._waiting, this._tasks.push(t);
+    poke(this);
+    return this;
+  },
+  abort: function() {
+    if (this._error == null) abort(this, new Error("abort"));
+    return this;
+  },
+  await: function(callback) {
+    if (typeof callback !== "function") throw new Error("invalid callback");
+    if (this._call) throw new Error("multiple await");
+    this._call = function(error, results) { callback.apply(null, [error].concat(results)); };
+    maybeNotify(this);
+    return this;
+  },
+  awaitAll: function(callback) {
+    if (typeof callback !== "function") throw new Error("invalid callback");
+    if (this._call) throw new Error("multiple await");
+    this._call = callback;
+    maybeNotify(this);
+    return this;
+  }
+};
+
+function poke(q) {
+  if (!q._start) {
+    try { start(q); } // let the current task complete
+    catch (e) {
+      if (q._tasks[q._ended + q._active - 1]) abort(q, e); // task errored synchronously
+      else if (!q._data) throw e; // await callback errored synchronously
+    }
+  }
+}
+
+function start(q) {
+  while (q._start = q._waiting && q._active < q._size) {
+    var i = q._ended + q._active,
+        t = q._tasks[i],
+        j = t.length - 1,
+        c = t[j];
+    t[j] = end(q, i);
+    --q._waiting, ++q._active;
+    t = c.apply(null, t);
+    if (!q._tasks[i]) continue; // task finished synchronously
+    q._tasks[i] = t || noabort;
+  }
+}
+
+function end(q, i) {
+  return function(e, r) {
+    if (!q._tasks[i]) return; // ignore multiple callbacks
+    --q._active, ++q._ended;
+    q._tasks[i] = null;
+    if (q._error != null) return; // ignore secondary errors
+    if (e != null) {
+      abort(q, e);
+    } else {
+      q._data[i] = r;
+      if (q._waiting) poke(q);
+      else maybeNotify(q);
+    }
+  };
+}
+
+function abort(q, e) {
+  var i = q._tasks.length, t;
+  q._error = e; // ignore active callbacks
+  q._data = undefined; // allow gc
+  q._waiting = NaN; // prevent starting
+
+  while (--i >= 0) {
+    if (t = q._tasks[i]) {
+      q._tasks[i] = null;
+      if (t.abort) {
+        try { t.abort(); }
+        catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  q._active = NaN; // allow notification
+  maybeNotify(q);
+}
+
+function maybeNotify(q) {
+  if (!q._active && q._call) {
+    var d = q._data;
+    q._data = undefined; // allow gc
+    q._call(q._error, d);
+  }
+}
+
+function queue(concurrency) {
+  if (concurrency == null) concurrency = Infinity;
+  else if (!((concurrency = +concurrency) >= 1)) throw new Error("invalid concurrency");
+  return new Queue(concurrency);
+}
+
+exports.queue = queue;
+
+Object.defineProperty(exports, '__esModule', { value: true });
+
+})));
+
+},{}],7:[function(require,module,exports){
 (function (process){
 /**
  * This is the web browser implementation of `debug()`.
@@ -2435,7 +2572,7 @@ function localstorage() {
 }
 
 }).call(this,require('_process'))
-},{"./debug":7,"_process":11}],7:[function(require,module,exports){
+},{"./debug":8,"_process":12}],8:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -2662,7 +2799,7 @@ function coerce(val) {
   return val;
 }
 
-},{"ms":10}],8:[function(require,module,exports){
+},{"ms":11}],9:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2966,7 +3103,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],9:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -3052,7 +3189,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],10:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 /**
  * Helpers.
  */
@@ -3206,7 +3343,7 @@ function plural(ms, n, name) {
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
 
-},{}],11:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -3392,7 +3529,7 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 (function (global){
 /*! https://mths.be/punycode v1.4.1 by @mathias */
 ;(function(root) {
@@ -3929,7 +4066,7 @@ process.umask = function() { return 0; };
 }(this));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],13:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -4015,7 +4152,7 @@ var isArray = Array.isArray || function (xs) {
   return Object.prototype.toString.call(xs) === '[object Array]';
 };
 
-},{}],14:[function(require,module,exports){
+},{}],15:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -4102,13 +4239,13 @@ var objectKeys = Object.keys || function (obj) {
   return res;
 };
 
-},{}],15:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 'use strict';
 
 exports.decode = exports.parse = require('./decode');
 exports.encode = exports.stringify = require('./encode');
 
-},{"./decode":13,"./encode":14}],16:[function(require,module,exports){
+},{"./decode":14,"./encode":15}],17:[function(require,module,exports){
 (function (process,Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -4769,7 +4906,7 @@ delegate_to_session('flow');
 module.exports = Connection;
 
 }).call(this,require('_process'),require("buffer").Buffer)
-},{"./endpoint.js":18,"./errors.js":19,"./frames.js":21,"./log.js":23,"./sasl.js":26,"./session.js":27,"./transport.js":29,"./util.js":31,"_process":11,"buffer":5,"events":8,"net":4,"tls":4}],17:[function(require,module,exports){
+},{"./endpoint.js":19,"./errors.js":20,"./frames.js":22,"./log.js":24,"./sasl.js":27,"./session.js":28,"./transport.js":30,"./util.js":32,"_process":12,"buffer":5,"events":9,"net":4,"tls":4}],18:[function(require,module,exports){
 (function (process){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -4871,7 +5008,7 @@ Container.prototype.message = require('./message.js');
 module.exports = new Container();
 
 }).call(this,require('_process'))
-},{"./connection.js":16,"./filter.js":20,"./log.js":23,"./message.js":24,"./rpc.js":25,"./sasl.js":26,"./types.js":30,"./util.js":31,"./ws.js":32,"_process":11,"events":8,"net":4,"tls":4}],18:[function(require,module,exports){
+},{"./connection.js":17,"./filter.js":21,"./log.js":24,"./message.js":25,"./rpc.js":26,"./sasl.js":27,"./types.js":31,"./util.js":32,"./ws.js":33,"_process":12,"events":9,"net":4,"tls":4}],19:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -4982,7 +5119,7 @@ EndpointState.prototype.need_close = function () {
 
 module.exports = EndpointState;
 
-},{}],19:[function(require,module,exports){
+},{}],20:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5034,7 +5171,7 @@ module.exports = {
     ConnectionError: ConnectionError
 };
 
-},{"util":37}],20:[function(require,module,exports){
+},{"util":38}],21:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5060,7 +5197,7 @@ module.exports = {
     }
 };
 
-},{"./types.js":30}],21:[function(require,module,exports){
+},{"./types.js":31}],22:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5360,7 +5497,7 @@ define_frame(frames.TYPE_SASL, sasl_outcome);
 
 module.exports = frames;
 
-},{"./errors.js":19,"./types.js":30}],22:[function(require,module,exports){
+},{"./errors.js":20,"./types.js":31}],23:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -5707,7 +5844,7 @@ Receiver.prototype.set_credit_window = function(credit_window) {
 module.exports = {'Sender': Sender, 'Receiver':Receiver};
 
 }).call(this,require("buffer").Buffer)
-},{"./endpoint.js":18,"./frames.js":21,"./log.js":23,"./message.js":24,"./terminus.js":28,"buffer":5,"events":8,"util":37}],23:[function(require,module,exports){
+},{"./endpoint.js":19,"./frames.js":22,"./log.js":24,"./message.js":25,"./terminus.js":29,"buffer":5,"events":9,"util":38}],24:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5737,7 +5874,7 @@ module.exports = {
     'io' : debug('rhea:io')
 };
 
-},{"debug":6}],24:[function(require,module,exports){
+},{"debug":7}],25:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -5998,7 +6135,7 @@ define_outcome({name:'modified',
 
 module.exports = message;
 
-},{"./log.js":23,"./types.js":30}],25:[function(require,module,exports){
+},{"./log.js":24,"./types.js":31}],26:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -6244,7 +6381,7 @@ module.exports = {
     client : function(connection, address) { return new Client(connection, address); }
 };
 
-},{"url":33}],26:[function(require,module,exports){
+},{"url":34}],27:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -6577,7 +6714,7 @@ module.exports = {
 };
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":19,"./frames.js":21,"./transport.js":29,"buffer":5}],27:[function(require,module,exports){
+},{"./errors.js":20,"./frames.js":22,"./transport.js":30,"buffer":5}],28:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -7241,7 +7378,7 @@ Session.prototype.on_transfer = function (frame) {
 module.exports = Session;
 
 }).call(this,require("buffer").Buffer)
-},{"./endpoint.js":18,"./frames.js":21,"./link.js":22,"./log.js":23,"./message.js":24,"./types.js":30,"./util.js":31,"buffer":5,"events":8}],28:[function(require,module,exports){
+},{"./endpoint.js":19,"./frames.js":22,"./link.js":23,"./log.js":24,"./message.js":25,"./types.js":31,"./util.js":32,"buffer":5,"events":9}],29:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -7317,7 +7454,7 @@ define_terminus(
 
 module.exports = terminus;
 
-},{"./types.js":30}],29:[function(require,module,exports){
+},{"./types.js":31}],30:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -7423,7 +7560,7 @@ Transport.prototype.read = function (buffer) {
 module.exports = Transport;
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":19,"./frames.js":21,"./log.js":23,"buffer":5}],30:[function(require,module,exports){
+},{"./errors.js":20,"./frames.js":22,"./log.js":24,"buffer":5}],31:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -8381,7 +8518,7 @@ add_type({name: 'error',
 module.exports = types;
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":19,"buffer":5}],31:[function(require,module,exports){
+},{"./errors.js":20,"buffer":5}],32:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -8460,7 +8597,7 @@ util.receiver_filter = function (filter) { return util.and(util.is_receiver, fil
 module.exports = util;
 
 }).call(this,require("buffer").Buffer)
-},{"./errors.js":19,"buffer":5}],32:[function(require,module,exports){
+},{"./errors.js":20,"buffer":5}],33:[function(require,module,exports){
 (function (Buffer){
 /*
  * Copyright 2015 Red Hat Inc.
@@ -8547,7 +8684,7 @@ module.exports = {
 };
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":5}],33:[function(require,module,exports){
+},{"buffer":5}],34:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -9281,7 +9418,7 @@ Url.prototype.parseHost = function() {
   if (host) this.hostname = host;
 };
 
-},{"./util":34,"punycode":12,"querystring":15}],34:[function(require,module,exports){
+},{"./util":35,"punycode":13,"querystring":16}],35:[function(require,module,exports){
 'use strict';
 
 module.exports = {
@@ -9299,7 +9436,7 @@ module.exports = {
   }
 };
 
-},{}],35:[function(require,module,exports){
+},{}],36:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -9324,14 +9461,14 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],36:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],37:[function(require,module,exports){
+},{}],38:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -9921,7 +10058,7 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":36,"_process":11,"inherits":35}],38:[function(require,module,exports){
+},{"./support/isBuffer":37,"_process":12,"inherits":36}],39:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -9938,387 +10075,393 @@ function hasOwnProperty(obj, prop) {
  * limitations under the License.
  */
 'use strict';
+
+/* global require Promise module */
 
 var util = require('./utilities.js');
+var d3q = require('d3-queue');
 
-  var Topology = function (connectionManager, schema) {
-    this.connection = connectionManager
-    this.updatedActions = {}
-    this.entities = []          // which entities to request each topology update
-    this.entityAttribs = {}
-    this._nodeInfo = {}         // info about all known nodes and entities
-    this.filtering = false      // filter out nodes that don't have connection info
+var Topology = function (connectionManager) {
+  this.connection = connectionManager;
+  this.updatedActions = {};
+  this.entities = [];          // which entities to request each topology update
+  this.entityAttribs = {};
+  this._nodeInfo = {};         // info about all known nodes and entities
+  this.filtering = false;      // filter out nodes that don't have connection info
 
-    this.timeout = 5000
-    this.updateInterval = 5000
-    this._getTimer = null
-    this.updating = false
+  this.timeout = 5000;
+  this.updateInterval = 5000;
+  this._getTimer = null;
+  this.updating = false;
+};
+Topology.prototype.addUpdatedAction = function(key, action) {
+  if (typeof action === 'function') {
+    this.updatedActions[key] = action;
   }
-  Topology.prototype.addUpdatedAction = function(key, action) {
-    if (angular.isFunction(action)) {
-      this.updatedActions[key] = action;
-    }
+};
+Topology.prototype.delUpdatedAction = function(key) {
+  if (key in this.updatedActions)
+    delete this.updatedActions[key];
+};
+Topology.prototype.executeUpdatedActions = function(error) {
+  for (var action in this.updatedActions) {
+    this.updatedActions[action].apply(this, [error]);
   }
-  Topology.prototype.delUpdatedAction = function(key) {
-    if (key in this.updatedActions)
-      delete this.updatedActions[key];
+};
+Topology.prototype.setUpdateEntities = function (entities) {
+  this.entities = entities;
+  for (var i=0; i<entities.length; i++) {
+    this.entityAttribs[entities[i]] = [];
   }
-  Topology.prototype.executeUpdatedActions = function(error) {
-    for (var action in this.updatedActions) {
-      this.updatedActions[action].apply(this, [error]);
-    }
+};
+Topology.prototype.addUpdateEntities = function (entityAttribs) {
+  if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
+    entityAttribs = [entityAttribs];
   }
-  Topology.prototype.setUpdateEntities = function (entities) {
-    this.entities = entities
-    for (var i=0; i<entities.length; i++) {
-      this.entityAttribs[entities[i]] = []
-    }
+  for (var i=0; i<entityAttribs.length; i++) {
+    var entity = entityAttribs[i].entity;
+    this.entityAttribs[entity] = entityAttribs[i].attrs || [];
   }
-  Topology.prototype.addUpdateEntities = function (entityAttribs) {
-    if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
-      entityAttribs = [entityAttribs]
-    }
-    for (var i=0; i<entityAttribs.length; i++) {
-      var entity = entityAttribs[i].entity
-      this.entityAttribs[entity] = entityAttribs[i].attrs || []
-    }
-  }
-  Topology.prototype.on = function (eventName, fn, key) {
-    if (eventName === 'updated')
-      this.addUpdatedAction(key, fn)
-  }
-  Topology.prototype.unregister = function (eventName, key) {
-    if (eventName === 'updated')
-      this.delUpdatedAction(key)
-  }
-  Topology.prototype.nodeInfo = function () {
-    return this._nodeInfo
-  }
-  Topology.prototype.get = function () {
-    return new Promise( (function (resolve, reject) {
-      this.connection.sendMgmtQuery("GET-MGMT-NODES")
-        .then( (function (response) {
-          response = response.response
-          if (Object.prototype.toString.call(response) === '[object Array]') {
-            var workInfo = {}
-            // if there is only one node, it will not be returned
-            if (response.length === 0) {
-              var parts = this.connection.getReceiverAddress().split('/')
-              parts[parts.length-1] = '$management'
-              response.push(parts.join('/'))
+};
+Topology.prototype.on = function (eventName, fn, key) {
+  if (eventName === 'updated')
+    this.addUpdatedAction(key, fn);
+};
+Topology.prototype.unregister = function (eventName, key) {
+  if (eventName === 'updated')
+    this.delUpdatedAction(key);
+};
+Topology.prototype.nodeInfo = function () {
+  return this._nodeInfo;
+};
+Topology.prototype.get = function () {
+  return new Promise( (function (resolve, reject) {
+    this.connection.sendMgmtQuery('GET-MGMT-NODES')
+      .then( (function (response) {
+        response = response.response;
+        if (Object.prototype.toString.call(response) === '[object Array]') {
+          var workInfo = {};
+          // if there is only one node, it will not be returned
+          if (response.length === 0) {
+            var parts = this.connection.getReceiverAddress().split('/');
+            parts[parts.length-1] = '$management';
+            response.push(parts.join('/'));
+          }
+          for (var i=0; i<response.length; ++i) {
+            workInfo[response[i]] = {};
+          }
+          var gotResponse = function (nodeName, entity, response) {
+            workInfo[nodeName][entity] = response;
+          };
+          var q = d3q.queue(this.connection.availableQeueuDepth());
+          for (var id in workInfo) {
+            for (var entity in this.entityAttribs) {
+              q.defer((this.q_fetchNodeInfo).bind(this), id, entity, this.entityAttribs[entity], q, gotResponse);
             }
-            for (var i=0; i<response.length; ++i) {
-              workInfo[response[i]] = {};
-            }
-            var gotResponse = function (nodeName, entity, response) {
-              workInfo[nodeName][entity] = response
-            }
-            var q = QDR.queue(this.connection.availableQeueuDepth())
-            for (var id in workInfo) {
-              for (var entity in this.entityAttribs) {
-                q.defer((this.q_fetchNodeInfo).bind(this), id, entity, this.entityAttribs[entity], q, gotResponse)
-              }
-            }
-            q.await((function (error) {
-              // filter out nodes that have no connection info
-              if (this.filtering) {
-                for (var id in workInfo) {
-                  if (!(workInfo[id]['connection'])) {
-                    this.flux = true
-                    delete workInfo[id]
-                  }
+          }
+          q.await((function () {
+            // filter out nodes that have no connection info
+            if (this.filtering) {
+              for (var id in workInfo) {
+                if (!(workInfo[id].connection)) {
+                  this.flux = true;
+                  delete workInfo[id];
                 }
               }
-              this._nodeInfo = util.copy(workInfo)
-              this.onDone(this._nodeInfo)
-              resolve(this._nodeInfo)
-            }).bind(this))
-          };
-        }).bind(this), function (error) {
-          reject(error)
-        })
-    }).bind(this))
-  }
-  Topology.prototype.onDone = function (result) {
-    clearTimeout(this._getTimer)
-    if (this.updating)
-      this._getTimer = setTimeout((this.get).bind(this), this.updateInterval)
-    this.executeUpdatedActions(result)
-  }
-
-  Topology.prototype.startUpdating = function (filter) {
-    this.stopUpdating();
-    this.updating = true
-    this.filtering = filter
-    this.get()
-  }
-  Topology.prototype.stopUpdating = function () {
-    this.updating = false
-    if (this._getTimer) {
-      clearTimeout(this._getTimer)
-      this._getTimer = null;
-    }
-  }
-
-  Topology.prototype.fetchEntity = function (node, entity, attrs, callback) {
-    var results = {}
-    var gotResponse = function (nodeName, dotentity, response) {
-      results = response
-    }
-    var q = QDR.queue(this.connection.availableQeueuDepth())
-    q.defer((this.q_fetchNodeInfo).bind(this), node, entity, attrs, q, gotResponse)
-    q.await(function (error) {
-      callback(node, entity, results)
-    })
-  }
-  // called from d3.queue.defer so the last argument (callback) is supplied by d3
-  Topology.prototype.q_fetchNodeInfo = function (nodeId, entity, attrs, q, heartbeat, callback) {
-    this.getNodeInfo(nodeId, entity, attrs, q, function (nodeName, dotentity, response) {
-      heartbeat(nodeName, dotentity, response)
-      callback(null)
-    })
-  }
-
-  // get/refreshes entities for all topology.nodes
-  // call doneCallback when all data is available
-  // optionally supply a resultCallBack that will be called as each result is avaialble
-  // if a resultCallBack is supplied, the calling function is responsible for accumulating the responses
-  //   otherwise the responses will be returned to the doneCallback as an object
-  Topology.prototype.fetchAllEntities = function(entityAttribs, doneCallback, resultCallback) {
-    var q = QDR.queue(this.connection.availableQeueuDepth())
-    var results = {}
-    if (!resultCallback) {
-      resultCallback = function (nodeName, dotentity, response) {
-        if (!results[nodeName])
-          results[nodeName] = {}
-        results[nodeName][dotentity] = response;
-      }
-    }
-    var gotAResponse = function (nodeName, dotentity, response) {
-      resultCallback(nodeName, dotentity, response)
-    }
-    if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
-      entityAttribs = [entityAttribs]
-    }
-    var nodes = Object.keys(this._nodeInfo)
-    for (var n=0; n<nodes.length; ++n) {
-      for (var i=0; i<entityAttribs.length; ++i) {
-        var ea = entityAttribs[i]
-        q.defer((this.q_fetchNodeInfo).bind(this), nodes[n], ea.entity, ea.attrs || [], q, gotAResponse)
-      }
-    }
-    q.await(function (error) {
-      doneCallback(results);
-    })
-  }
-
-    // enusre all the topology nones have all these entities
-  Topology.prototype.ensureAllEntities= function(entityAttribs, callback, extra) {
-    this.ensureEntities(Object.keys(this._nodeInfo), entityAttribs, callback, extra)
-  }
-
-    // ensure these nodes have all these entities. don't fetch unless forced to
-  Topology.prototype.ensureEntities = function(nodes, entityAttribs, callback, extra) {
-    if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
-      entityAttribs = [entityAttribs]
-    }
-    if (Object.prototype.toString.call(nodes) !== '[object Array]') {
-      nodes = [nodes]
-    }
-    this.addUpdateEntities(entityAttribs)
-    var q = QDR.queue(this.connection.availableQeueuDepth())
-    for (var n=0; n<nodes.length; ++n) {
-      for (var i=0; i<entityAttribs.length; ++i) {
-        var ea = entityAttribs[i]
-        // if we don'e already have the entity or we want to force a refresh
-        if (!this._nodeInfo[nodes[n]][ea.entity] || ea.force)
-          q.defer((this.q_ensureNodeInfo).bind(this), nodes[n], ea.entity, ea.attrs || [], q)
-      }
-    }
-    q.await(function (error) {
-      callback(extra);
-    })
-  }
-  Topology.prototype.addNodeInfo = function(id, entity, values) {
-    // save the results in the nodeInfo object
-    if (id) {
-      if (!(id in this._nodeInfo)) {
-        this._nodeInfo[id] = {};
-      }
-      // copy the values to allow garbage collection
-      this._nodeInfo[id][entity] = values
-    }
-  }
-  Topology.prototype.isLargeNetwork = function() {
-    return Object.keys(this._nodeInfo).length >= 12
-  }
-  Topology.prototype.getConnForLink = function(link) {
-    // find the connection for this link
-    var conns = this._nodeInfo[link.nodeId]['connection']
-    var connIndex = conns.attributeNames.indexOf("identity")
-    var linkCons = conns.results.filter(function(conn) {
-      return conn[connIndex] === link.connectionId;
-    })
-    return util.flatten(conns.attributeNames, linkCons[0]);
-  }
-
-  Topology.prototype.nodeNameList = function() {
-    var nl = [];
-    for (var id in this._nodeInfo) {
-      nl.push(this.nameFromId(id));
-    }
-    return nl.sort();
-    }
-  Topology.prototype.nodeIdList = function() {
-    var nl = [];
-    for (var id in this._nodeInfo) {
-      //if (this._nodeInfo['connection'])
-        nl.push(id);
-    }
-    return nl.sort();
-  }
-  Topology.prototype.nodeList = function() {
-    var nl = [];
-    for (var id in this._nodeInfo) {
-      nl.push({
-        name: this.nameFromId(id),
-        id: id
-      });
-    }
-    return nl;
-  }
-  // extract the name of the router from the router id
-  Topology.prototype.nameFromId = function(id) {
-    // the router id looks like 'amqp:/topo/0/routerName/$managemrnt'
-    var parts = id.split('/')
-    // handle cases where the router name contains a /
-    parts.splice(0, 3)  // remove amqp, topo, 0
-    parts.pop()         // remove $management
-    return parts.join('/')
-  }
-
-  // d3.queue'd function to make a management query for entities/attributes
-  Topology.prototype.q_ensureNodeInfo = function (nodeId, entity, attrs, q, callback) {
-    this.getNodeInfo(nodeId, entity, attrs, q, (function (nodeName, dotentity, response) {
-      this.addNodeInfo(nodeName, dotentity, response)
-      callback(null)
-    }).bind(this))
-    return {
-      abort: function() {
-        delete this._nodeInfo[nodeId]
-      }
-    }
-  }
-
-  Topology.prototype.getNodeInfo = function (nodeName, entity, attrs, q, callback) {
-    var timedOut = function (q) {
-      q.abort()
-    }
-    var atimer = setTimeout(timedOut, this.timeout, q);
-    this.connection.sendQuery(nodeName, entity, attrs)
-      .then( function (response) {
-        clearTimeout(atimer)
-        callback(nodeName, entity, response.response);
-      }, function (error) {
-        q.abort()
-      })
-  }
-  Topology.prototype.getMultipleNodeInfo = function (nodeNames, entity, attrs, callback, selectedNodeId, aggregate) {
-    var self = this
-    if (!angular.isDefined(aggregate))
-      aggregate = true;
-    var responses = {};
-    var gotNodesResult = function(nodeName, dotentity, response) {
-      responses[nodeName] = response;
-    }
-
-    var q = QDR.queue(this.connection.availableQeueuDepth())
-    nodeNames.forEach(function(id) {
-      q.defer((self.q_fetchNodeInfo).bind(self), id, entity, attrs, q, gotNodesResult)
-    })
-    q.await(function (error) {
-      if (aggregate)
-        self.aggregateNodeInfo(nodeNames, entity, selectedNodeId, responses, callback);
-      else {
-        callback(nodeNames, entity, responses)
-      }
-    })
-  }
-  Topology.prototype.quiesceLink = function (nodeId, name) {
-    var attributes = {
-      adminStatus: 'disabled',
-      name: name
-    };
-    return this.connection.sendMethod(nodeId, "router.link", attributes, "UPDATE")
-  }
-
-  Topology.prototype.aggregateNodeInfo = function (nodeNames, entity, selectedNodeId, responses, callback) {
-    // aggregate the responses
-    var self = this
-    var newResponse = {};
-    var thisNode = responses[selectedNodeId];
-    newResponse['attributeNames'] = thisNode.attributeNames;
-    newResponse['results'] = thisNode.results;
-    newResponse['aggregates'] = [];
-    for (var i = 0; i < thisNode.results.length; ++i) {
-      var result = thisNode.results[i];
-      var vals = [];
-      result.forEach(function(val) {
-        vals.push({
-          sum: val,
-          detail: []
-        })
-      })
-      newResponse.aggregates.push(vals);
-    }
-    var nameIndex = thisNode.attributeNames.indexOf("name");
-    var ent = self.connection.schema.entityTypes[entity];
-    var ids = Object.keys(responses);
-    ids.sort();
-    ids.forEach(function(id) {
-      var response = responses[id];
-      var results = response.results;
-      results.forEach(function(result) {
-        // find the matching result in the aggregates
-        var found = newResponse.aggregates.some(function(aggregate, j) {
-          if (aggregate[nameIndex].sum === result[nameIndex]) {
-            // result and aggregate are now the same record, add the graphable values
-            newResponse.attributeNames.forEach(function(key, i) {
-              if (ent.attributes[key] && ent.attributes[key].graph) {
-                if (id != selectedNodeId)
-                  aggregate[i].sum += result[i];
-              }
-              aggregate[i].detail.push({
-                node: self.nameFromId(id) + ':',
-                val: result[i]
-              })
-            })
-            return true; // stop looping
-          }
-          return false; // continute looking for the aggregate record
-        })
-        if (!found) {
-          // this attribute was not found in the aggregates yet
-          // because it was not in the selectedNodeId's results
-          var vals = [];
-          result.forEach(function(val) {
-            vals.push({
-              sum: val,
-              detail: [{
-                node: self.nameFromId(id),
-                val: val
-              }]
-            })
-          })
-          newResponse.aggregates.push(vals)
+            }
+            this._nodeInfo = util.copy(workInfo);
+            this.onDone(this._nodeInfo);
+            resolve(this._nodeInfo);
+          }).bind(this));
         }
-      })
-    })
-    callback(nodeNames, entity, newResponse);
+      }).bind(this), function (error) {
+        reject(error);
+      });
+  }).bind(this));
+};
+Topology.prototype.onDone = function (result) {
+  clearTimeout(this._getTimer);
+  if (this.updating)
+    this._getTimer = setTimeout((this.get).bind(this), this.updateInterval);
+  this.executeUpdatedActions(result);
+};
+
+Topology.prototype.startUpdating = function (filter) {
+  this.stopUpdating();
+  this.updating = true;
+  this.filtering = filter;
+  this.get();
+};
+Topology.prototype.stopUpdating = function () {
+  this.updating = false;
+  if (this._getTimer) {
+    clearTimeout(this._getTimer);
+    this._getTimer = null;
   }
+};
+
+Topology.prototype.fetchEntity = function (node, entity, attrs, callback) {
+  var results = {};
+  var gotResponse = function (nodeName, dotentity, response) {
+    results = response;
+  };
+  var q = d3q.queue(this.connection.availableQeueuDepth());
+  q.defer((this.q_fetchNodeInfo).bind(this), node, entity, attrs, q, gotResponse);
+  q.await(function () {
+    callback(node, entity, results);
+  });
+};
+// called from d3.queue.defer so the last argument (callback) is supplied by d3
+Topology.prototype.q_fetchNodeInfo = function (nodeId, entity, attrs, q, heartbeat, callback) {
+  this.getNodeInfo(nodeId, entity, attrs, q, function (nodeName, dotentity, response) {
+    heartbeat(nodeName, dotentity, response);
+    callback(null);
+  });
+};
+
+// get/refreshes entities for all topology.nodes
+// call doneCallback when all data is available
+// optionally supply a resultCallBack that will be called as each result is avaialble
+// if a resultCallBack is supplied, the calling function is responsible for accumulating the responses
+//   otherwise the responses will be returned to the doneCallback as an object
+Topology.prototype.fetchAllEntities = function(entityAttribs, doneCallback, resultCallback) {
+  var q = d3q.queue(this.connection.availableQeueuDepth());
+  var results = {};
+  if (!resultCallback) {
+    resultCallback = function (nodeName, dotentity, response) {
+      if (!results[nodeName])
+        results[nodeName] = {};
+      results[nodeName][dotentity] = response;
+    };
+  }
+  var gotAResponse = function (nodeName, dotentity, response) {
+    resultCallback(nodeName, dotentity, response);
+  };
+  if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
+    entityAttribs = [entityAttribs];
+  }
+  var nodes = Object.keys(this._nodeInfo);
+  for (var n=0; n<nodes.length; ++n) {
+    for (var i=0; i<entityAttribs.length; ++i) {
+      var ea = entityAttribs[i];
+      q.defer((this.q_fetchNodeInfo).bind(this), nodes[n], ea.entity, ea.attrs || [], q, gotAResponse);
+    }
+  }
+  q.await(function () {
+    doneCallback(results);
+  });
+};
+
+// enusre all the topology nones have all these entities
+Topology.prototype.ensureAllEntities= function(entityAttribs, callback, extra) {
+  this.ensureEntities(Object.keys(this._nodeInfo), entityAttribs, callback, extra);
+};
+
+// ensure these nodes have all these entities. don't fetch unless forced to
+Topology.prototype.ensureEntities = function(nodes, entityAttribs, callback, extra) {
+  if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
+    entityAttribs = [entityAttribs];
+  }
+  if (Object.prototype.toString.call(nodes) !== '[object Array]') {
+    nodes = [nodes];
+  }
+  this.addUpdateEntities(entityAttribs);
+  var q = d3q.queue(this.connection.availableQeueuDepth());
+  for (var n=0; n<nodes.length; ++n) {
+    for (var i=0; i<entityAttribs.length; ++i) {
+      var ea = entityAttribs[i];
+      // if we don'e already have the entity or we want to force a refresh
+      if (!this._nodeInfo[nodes[n]][ea.entity] || ea.force)
+        q.defer((this.q_ensureNodeInfo).bind(this), nodes[n], ea.entity, ea.attrs || [], q);
+    }
+  }
+  q.await(function () {
+    callback(extra);
+  });
+};
+Topology.prototype.addNodeInfo = function(id, entity, values) {
+  // save the results in the nodeInfo object
+  if (id) {
+    if (!(id in this._nodeInfo)) {
+      this._nodeInfo[id] = {};
+    }
+    // copy the values to allow garbage collection
+    this._nodeInfo[id][entity] = values;
+  }
+};
+Topology.prototype.isLargeNetwork = function() {
+  return Object.keys(this._nodeInfo).length >= 12;
+};
+Topology.prototype.getConnForLink = function(link) {
+  // find the connection for this link
+  var conns = this._nodeInfo[link.nodeId].connection;
+  var connIndex = conns.attributeNames.indexOf('identity');
+  var linkCons = conns.results.filter(function(conn) {
+    return conn[connIndex] === link.connectionId;
+  });
+  return util.flatten(conns.attributeNames, linkCons[0]);
+};
+
+Topology.prototype.nodeNameList = function() {
+  var nl = [];
+  for (var id in this._nodeInfo) {
+    nl.push(this.nameFromId(id));
+  }
+  return nl.sort();
+};
+Topology.prototype.nodeIdList = function() {
+  var nl = [];
+  for (var id in this._nodeInfo) {
+    //if (this._nodeInfo['connection'])
+    nl.push(id);
+  }
+  return nl.sort();
+};
+Topology.prototype.nodeList = function() {
+  var nl = [];
+  for (var id in this._nodeInfo) {
+    nl.push({
+      name: this.nameFromId(id),
+      id: id
+    });
+  }
+  return nl;
+};
+// extract the name of the router from the router id
+Topology.prototype.nameFromId = function(id) {
+  // the router id looks like 'amqp:/topo/0/routerName/$managemrnt'
+  var parts = id.split('/');
+  // handle cases where the router name contains a /
+  parts.splice(0, 3);  // remove amqp, topo, 0
+  parts.pop();         // remove $management
+  return parts.join('/');
+};
+
+// d3.queue'd function to make a management query for entities/attributes
+Topology.prototype.q_ensureNodeInfo = function (nodeId, entity, attrs, q, callback) {
+  this.getNodeInfo(nodeId, entity, attrs, q, (function (nodeName, dotentity, response) {
+    this.addNodeInfo(nodeName, dotentity, response);
+    callback(null);
+  }).bind(this));
+  return {
+    abort: function() {
+      delete this._nodeInfo[nodeId];
+    }
+  };
+};
+
+Topology.prototype.getNodeInfo = function (nodeName, entity, attrs, q, callback) {
+  var timedOut = function (q) {
+    q.abort();
+  };
+  var atimer = setTimeout(timedOut, this.timeout, q);
+  this.connection.sendQuery(nodeName, entity, attrs)
+    .then( function (response) {
+      clearTimeout(atimer);
+      callback(nodeName, entity, response.response);
+    }, function () {
+      q.abort();
+    });
+};
+Topology.prototype.getMultipleNodeInfo = function (nodeNames, entity, attrs, callback, selectedNodeId, aggregate) {
+  var self = this;
+  if (typeof aggregate === 'undefined')
+    aggregate = true;
+  var responses = {};
+  var gotNodesResult = function(nodeName, dotentity, response) {
+    responses[nodeName] = response;
+  };
+
+  var q = d3q.queue(this.connection.availableQeueuDepth());
+  nodeNames.forEach(function(id) {
+    q.defer((self.q_fetchNodeInfo).bind(self), id, entity, attrs, q, gotNodesResult);
+  });
+  q.await(function () {
+    if (aggregate)
+      self.aggregateNodeInfo(nodeNames, entity, selectedNodeId, responses, callback);
+    else {
+      callback(nodeNames, entity, responses);
+    }
+  });
+};
+Topology.prototype.quiesceLink = function (nodeId, name) {
+  var attributes = {
+    adminStatus: 'disabled',
+    name: name
+  };
+  return this.connection.sendMethod(nodeId, 'router.link', attributes, 'UPDATE');
+};
+
+Topology.prototype.aggregateNodeInfo = function (nodeNames, entity, selectedNodeId, responses, callback) {
+  // aggregate the responses
+  var self = this;
+  var newResponse = {};
+  var thisNode = responses[selectedNodeId];
+  newResponse.attributeNames = thisNode.attributeNames;
+  newResponse.results = thisNode.results;
+  newResponse.aggregates = [];
+  // initialize the aggregates
+  for (var i = 0; i < thisNode.results.length; ++i) {
+    // there is a result for each unique entity found (ie addresses, links, etc.)
+    var result = thisNode.results[i];
+    var vals = [];
+    // there is a val for each attribute in this entity
+    result.forEach(function(val) {
+      vals.push({
+        sum: val,
+        detail: []
+      });
+    });
+    newResponse.aggregates.push(vals);
+  }
+  var nameIndex = thisNode.attributeNames.indexOf('name');
+  var ent = self.connection.schema.entityTypes[entity];
+  var ids = Object.keys(responses);
+  ids.sort();
+  ids.forEach(function(id) {
+    var response = responses[id];
+    var results = response.results;
+    results.forEach(function(result) {
+      // find the matching result in the aggregates
+      var found = newResponse.aggregates.some(function(aggregate) {
+        if (aggregate[nameIndex].sum === result[nameIndex]) {
+          // result and aggregate are now the same record, add the graphable values
+          newResponse.attributeNames.forEach(function(key, i) {
+            if (ent.attributes[key] && ent.attributes[key].graph) {
+              if (id != selectedNodeId)
+                aggregate[i].sum += result[i];
+            }
+            aggregate[i].detail.push({
+              node: self.nameFromId(id) + ':',
+              val: result[i]
+            });
+          });
+          return true; // stop looping
+        }
+        return false; // continute looking for the aggregate record
+      });
+      if (!found) {
+        // this attribute was not found in the aggregates yet
+        // because it was not in the selectedNodeId's results
+        var vals = [];
+        result.forEach(function(val) {
+          vals.push({
+            sum: val,
+            detail: [{
+              node: self.nameFromId(id),
+              val: val
+            }]
+          });
+        });
+        newResponse.aggregates.push(vals);
+      }
+    });
+  });
+  callback(nodeNames, entity, newResponse);
+};
 
 module.exports = Topology;
-},{"./utilities.js":39}],39:[function(require,module,exports){
+},{"./utilities.js":40,"d3-queue":6}],40:[function(require,module,exports){
 /*
  * Copyright 2015 Red Hat Inc.
  *
@@ -10336,87 +10479,89 @@ module.exports = Topology;
  */
 'use strict';
 
-  var Utilities = {}
-  Utilities.isAConsole = function (properties, connectionId, nodeType, key) {
-    return this.isConsole({
-      properties: properties,
-      connectionId: connectionId,
-      nodeType: nodeType,
-      key: key
-    })
-  }
-  Utilities.isConsole = function (d) {
-    return (d && d['properties'] && d['properties']['console_identifier'] === 'Dispatch console')
-  }
-  Utilities.isArtemis = function (d) {
-    return (d.nodeType === 'route-container' || d.nodeType === 'on-demand') && (d.properties && d.properties.product === 'apache-activemq-artemis');
-  }
+/* global d3 */
 
-  Utilities.isQpid = function (d) {
-    return (d.nodeType === 'route-container' || d.nodeType === 'on-demand') && (d.properties && d.properties.product === 'qpid-cpp');
+var Utilities = {};
+Utilities.isAConsole = function (properties, connectionId, nodeType, key) {
+  return this.isConsole({
+    properties: properties,
+    connectionId: connectionId,
+    nodeType: nodeType,
+    key: key
+  });
+};
+Utilities.isConsole = function (d) {
+  return (d && d.properties && d.properties.console_identifier === 'Dispatch console');
+};
+Utilities.isArtemis = function (d) {
+  return (d.nodeType === 'route-container' || d.nodeType === 'on-demand') && (d.properties && d.properties.product === 'apache-activemq-artemis');
+};
+
+Utilities.isQpid = function (d) {
+  return (d.nodeType === 'route-container' || d.nodeType === 'on-demand') && (d.properties && d.properties.product === 'qpid-cpp');
+};
+Utilities.flatten = function (attributes, result) {
+  var flat = {};
+  attributes.forEach(function(attr, i) {
+    if (result && result.length > i)
+      flat[attr] = result[i];
+  });
+  return flat;
+};
+Utilities.copy = function (obj) {
+  return JSON.parse(JSON.stringify(obj));
+};
+Utilities.identity_clean = function (identity) {
+  if (!identity)
+    return '-';
+  var pos = identity.indexOf('/');
+  if (pos >= 0)
+    return identity.substring(pos + 1);
+  return identity;
+};
+Utilities.addr_text = function (addr) {
+  if (!addr)
+    return '-';
+  if (addr[0] == 'M')
+    return addr.substring(2);
+  else
+    return addr.substring(1);
+};
+Utilities.addr_class = function (addr) {
+  if (!addr) return '-';
+  if (addr[0] == 'M') return 'mobile';
+  if (addr[0] == 'R') return 'router';
+  if (addr[0] == 'A') return 'area';
+  if (addr[0] == 'L') return 'local';
+  if (addr[0] == 'C') return 'link-incoming';
+  if (addr[0] == 'E') return 'link-incoming';
+  if (addr[0] == 'D') return 'link-outgoing';
+  if (addr[0] == 'F') return 'link-outgoing';
+  if (addr[0] == 'T') return 'topo';
+  return 'unknown: ' + addr[0];
+};
+Utilities.humanify = function (s) {
+  if (!s || s.length === 0)
+    return s;
+  var t = s.charAt(0).toUpperCase() + s.substr(1).replace(/[A-Z]/g, ' $&');
+  return t.replace('.', ' ');
+};
+Utilities.pretty = function (v) {
+  var formatComma = d3.format(',');
+  if (!isNaN(parseFloat(v)) && isFinite(v))
+    return formatComma(v);
+  return v;
+};
+Utilities.isMSIE = function () {
+  return (document.documentMode || /Edge/.test(navigator.userAgent));
+};
+Utilities.valFor = function (aAr, vAr, key) {
+  var idx = aAr.indexOf(key);
+  if ((idx > -1) && (idx < vAr.length)) {
+    return vAr[idx];
   }
-  Utilities.flatten = function (attributes, result) {
-    var flat = {}
-    attributes.forEach(function(attr, i) {
-      if (result && result.length > i)
-        flat[attr] = result[i]
-    })
-    return flat;
-  }
-  Utilities.copy = function (obj) {
-    return JSON.parse(JSON.stringify(obj))
-  }
-  Utilities.identity_clean = function (identity) {
-    if (!identity)
-      return "-"
-    var pos = identity.indexOf('/')
-    if (pos >= 0)
-      return identity.substring(pos + 1)
-    return identity
-  }
-  Utilities.addr_text = function (addr) {
-    if (!addr)
-      return "-"
-    if (addr[0] == 'M')
-      return addr.substring(2)
-    else
-      return addr.substring(1)
-  }
-  Utilities.addr_class = function (addr) {
-    if (!addr) return "-"
-    if (addr[0] == 'M') return "mobile"
-    if (addr[0] == 'R') return "router"
-    if (addr[0] == 'A') return "area"
-    if (addr[0] == 'L') return "local"
-    if (addr[0] == 'C') return "link-incoming"
-    if (addr[0] == 'E') return "link-incoming"
-    if (addr[0] == 'D') return "link-outgoing"
-    if (addr[0] == 'F') return "link-outgoing"
-    if (addr[0] == 'T') return "topo"
-    return "unknown: " + addr[0]
-  }
-  Utilities.humanify = function (s) {
-    if (!s || s.length === 0)
-      return s;
-    var t = s.charAt(0).toUpperCase() + s.substr(1).replace(/[A-Z]/g, ' $&');
-    return t.replace(".", " ");
-  }
-  Utilities.pretty = function (v) {
-    var formatComma = d3.format(",");
-    if (!isNaN(parseFloat(v)) && isFinite(v))
-      return formatComma(v);
-    return v;
-  }
-  Utilities.isMSIE = function () {
-    return (document.documentMode || /Edge/.test(navigator.userAgent))
-  }
-  Utilities.valFor = function (aAr, vAr, key) {
-    var idx = aAr.indexOf(key);
-    if ((idx > -1) && (idx < vAr.length)) {
-      return vAr[idx];
-    }
-    return null;
-  }
+  return null;
+};
 
 module.exports = Utilities;
 },{}],"dispatch-management":[function(require,module,exports){
@@ -10437,53 +10582,55 @@ module.exports = Utilities;
  */
 'use strict';
 
-var ConnectionManager = require('./connection.js').ConnectionManager
-var Topology = require('./topology.js')
-var util = require('./utilities.js')
+/* global Promise */
 
-  var Management = function (protocol) {
-    this.connection = new ConnectionManager(protocol)
-    this.topology = new Topology(this.connection)
-  }
-  Management.prototype.getSchema = function (callback) {
-    var self = this
-    return new Promise(function (resolve, reject) {
-      self.connection.sendMgmtQuery("GET-SCHEMA")
-        .then(function (responseAndContext) {
-          var response = responseAndContext.response
-          for (var entityName in response.entityTypes) {
-            var entity = response.entityTypes[entityName]
-            if (entity.deprecated) {
-              // deprecated entity
-              delete response.entityTypes[entityName]
-            } else {
-              for (var attributeName in entity.attributes) {
-                var attribute = entity.attributes[attributeName]
-                if (attribute.deprecated) {
-                  // deprecated attribute
-                  delete response.entityTypes[entityName].attributes[attributeName]
-                }
+var ConnectionManager = require('./connection.js').ConnectionManager;
+var Topology = require('./topology.js');
+var util = require('./utilities.js');
+
+var Management = function (protocol) {
+  this.connection = new ConnectionManager(protocol);
+  this.topology = new Topology(this.connection);
+};
+Management.prototype.getSchema = function (callback) {
+  var self = this;
+  return new Promise(function (resolve, reject) {
+    self.connection.sendMgmtQuery('GET-SCHEMA')
+      .then(function (responseAndContext) {
+        var response = responseAndContext.response;
+        for (var entityName in response.entityTypes) {
+          var entity = response.entityTypes[entityName];
+          if (entity.deprecated) {
+            // deprecated entity
+            delete response.entityTypes[entityName];
+          } else {
+            for (var attributeName in entity.attributes) {
+              var attribute = entity.attributes[attributeName];
+              if (attribute.deprecated) {
+                // deprecated attribute
+                delete response.entityTypes[entityName].attributes[attributeName];
               }
             }
           }
-          self.connection.setSchema(response)
-          if (callback)
-            callback(response)
-          resolve(response)
-        }, function (error) {
-          if (callback)
-            callback(error)
-          reject(error)
-        })
-    })
-  }
-  Management.prototype.schema = function () {
-    return this.connection.schema
-  }
+        }
+        self.connection.setSchema(response);
+        if (callback)
+          callback(response);
+        resolve(response);
+      }, function (error) {
+        if (callback)
+          callback(error);
+        reject(error);
+      });
+  });
+};
+Management.prototype.schema = function () {
+  return this.connection.schema;
+};
 
 module.exports = {
-    Management: Management,
-    Utilities: util
-}
+  Management: Management,
+  Utilities: util
+};
 
-},{"./connection.js":1,"./topology.js":38,"./utilities.js":39}]},{},[]);
+},{"./connection.js":1,"./topology.js":39,"./utilities.js":40}]},{},[]);

@@ -11,16 +11,28 @@
         "type": "range"
       },
       "/home/eallen/workspace/qpid-dispatch/console/stand-alone"
+    ],
+    [
+      {
+        "raw": "dispatch-management@^0.1.0",
+        "scope": null,
+        "escapedName": "dispatch-management",
+        "name": "dispatch-management",
+        "rawSpec": "^0.1.0",
+        "spec": ">=0.1.0 <0.2.0",
+        "type": "range"
+      },
+      "/home/eallen/workspace/qpid-dispatch/console/stand-alone"
     ]
   ],
-  "_from": "dispatch-management@>=0.1.0 <0.2.0",
-  "_id": "dispatch-management@0.1.2",
+  "_from": "dispatch-management@^0.1.0",
+  "_id": "dispatch-management@0.1.13",
   "_inCache": true,
   "_location": "/dispatch-management",
-  "_nodeVersion": "6.11.4",
+  "_nodeVersion": "6.12.0",
   "_npmOperationalInternal": {
     "host": "s3://npm-registry-packages",
-    "tmp": "tmp/dispatch-management-0.1.2.tgz_1509919505452_0.3502418673597276"
+    "tmp": "tmp/dispatch-management-0.1.13.tgz_1512741345665_0.6826986344531178"
   },
   "_npmUser": {
     "name": "ernest.allen",
@@ -40,8 +52,8 @@
   "_requiredBy": [
     "/"
   ],
-  "_resolved": "https://registry.npmjs.org/dispatch-management/-/dispatch-management-0.1.2.tgz",
-  "_shasum": "ae1e7a6b6b6de2a2b936769dc5bfdbd8b27ad5d8",
+  "_resolved": "https://registry.npmjs.org/dispatch-management/-/dispatch-management-0.1.13.tgz",
+  "_shasum": "5afdcf490ade01a988134d521042e3367a1084e9",
   "_shrinkwrap": null,
   "_spec": "dispatch-management@^0.1.0",
   "_where": "/home/eallen/workspace/qpid-dispatch/console/stand-alone",
@@ -52,6 +64,7 @@
     "url": "https://github.com/ErnieAllen/dispatch-management/issues"
   },
   "dependencies": {
+    "d3-queue": "^3.0.7",
     "rhea": "^0.2.6"
   },
   "description": "wrapper for rhea to manage a dispatch router",
@@ -61,8 +74,8 @@
   },
   "directories": {},
   "dist": {
-    "shasum": "ae1e7a6b6b6de2a2b936769dc5bfdbd8b27ad5d8",
-    "tarball": "https://registry.npmjs.org/dispatch-management/-/dispatch-management-0.1.2.tgz"
+    "shasum": "5afdcf490ade01a988134d521042e3367a1084e9",
+    "tarball": "https://registry.npmjs.org/dispatch-management/-/dispatch-management-0.1.13.tgz"
   },
   "gitHead": "d12653ca14f0191e90c9724102902e45b3095cac",
   "homepage": "http://github.com/ErnieAllen/dispatch-management",
