@@ -10076,7 +10076,7 @@ function hasOwnProperty(obj, prop) {
  */
 'use strict';
 
-/* global require Promise module */
+/* global Promise */
 
 var util = require('./utilities.js');
 var d3q = require('d3-queue');
