@@ -21,8 +21,6 @@ var Correlator = function () {
   this._objects = {};
   this._correlationID = 0;
   this.maxCorrelatorDepth = 10;
-  this.lostConnection = false;
-
 };
 Correlator.prototype.corr = function () {
   return ++(this._correlationID) + '';

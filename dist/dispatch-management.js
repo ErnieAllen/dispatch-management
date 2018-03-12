@@ -374,8 +374,6 @@ var Correlator = function () {
   this._objects = {};
   this._correlationID = 0;
   this.maxCorrelatorDepth = 10;
-  this.lostConnection = false;
-
 };
 Correlator.prototype.corr = function () {
   return ++(this._correlationID) + '';
@@ -10219,11 +10217,33 @@ Topology.prototype.q_fetchNodeInfo = function (nodeId, entity, attrs, q, heartbe
   });
 };
 
-// get/refreshes entities for all topology.nodes
-// call doneCallback when all data is available
-// optionally supply a resultCallBack that will be called as each result is avaialble
-// if a resultCallBack is supplied, the calling function is responsible for accumulating the responses
-//   otherwise the responses will be returned to the doneCallback as an object
+// get all the requested entities/attributes for a single router
+Topology.prototype.fetchEntities = function(node, entityAttribs, doneCallback, resultCallback) {
+  var q = d3q.queue(this.connection.availableQeueuDepth());
+  var results = {};
+  if (!resultCallback) {
+    resultCallback = function (nodeName, dotentity, response) {
+      if (!results[nodeName])
+        results[nodeName] = {};
+      results[nodeName][dotentity] = response;
+    };
+  }
+  var gotAResponse = function (nodeName, dotentity, response) {
+    resultCallback(nodeName, dotentity, response);
+  };
+  if (Object.prototype.toString.call(entityAttribs) !== '[object Array]') {
+    entityAttribs = [entityAttribs];
+  }
+  for (var i=0; i<entityAttribs.length; ++i) {
+    var ea = entityAttribs[i];
+    q.defer((this.q_fetchNodeInfo).bind(this), node, ea.entity, ea.attrs || [], q, gotAResponse);
+  }
+  q.await(function () {
+    doneCallback(results);
+  });
+};
+
+// get all the requested entities for all known routers
 Topology.prototype.fetchAllEntities = function(entityAttribs, doneCallback, resultCallback) {
   var q = d3q.queue(this.connection.availableQeueuDepth());
   var results = {};
