@@ -64,8 +64,7 @@
     "url": "https://github.com/ErnieAllen/dispatch-management/issues"
   },
   "dependencies": {
-    "d3-queue": "^3.0.7",
-    "rhea": "^0.2.6"
+    "d3-queue": "^3.0.7"
   },
   "description": "wrapper for rhea to manage a dispatch router",
   "devDependencies": {
