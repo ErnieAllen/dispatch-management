@@ -221,7 +221,7 @@ ConnectionManager.prototype.testConnect = function (options, callback) {
     if (options.linkRouteAddress) {
       baseAddress += ('/'+options.linkRouteAddress);
     }
-    var wsprotocol = location.protocol === 'https' ? 'wss' : 'ws';
+    var wsprotocol = location.protocol === 'https:' ? 'wss' : 'ws';
 
     if (this.connection) {
       delete this.connection;
