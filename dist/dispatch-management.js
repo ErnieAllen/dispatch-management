@@ -237,6 +237,12 @@ ConnectionManager.prototype.testConnect = function (options, callback) {
     if (options.hostname)
       c.hostname = options.hostname;
 
+    if (options.username && options.username !== '') {
+      c.username = options.username;
+    }
+    if (options.password && options.password !== '') {
+      c.password = options.password;
+    }
     // set a timeout
     var disconnected = (function () {
       clearTimeout(timer);
