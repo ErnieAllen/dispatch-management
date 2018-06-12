@@ -238,11 +238,9 @@ ConnectionManager.prototype.testConnect = function (options, callback) {
 
     if (options.username && options.username !== '') {
       c.username = options.username;
-      console.log('setting username to ' + options.username);
     }
     if (options.password && options.password !== '') {
       c.password = options.password;
-      console.log('setting password to ' + options.password);
     }
     // set a timeout
     var disconnected = (function () {
