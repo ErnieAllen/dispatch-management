@@ -83,6 +83,10 @@ Topology.prototype.get = function () {
           // if there is only one node, it will not be returned
           if (response.length === 0) {
             var parts = this.connection.getReceiverAddress().split('/');
+            if (parts.length === 4) {
+              // edge router edge case. insert a 0 into the 3rd position
+              parts.splice(2, 0, '0');
+            }
             parts[parts.length-1] = '$management';
             response.push(parts.join('/'));
           }
